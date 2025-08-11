@@ -1,0 +1,375 @@
+@use '../shared/Theme/ComponentTheme' as theme;
+
+.field {
+  @extend %component-base;
+
+  display: grid;
+  margin-bottom: var(--field-spacing-xl);
+
+  // Horizontal layout (default)
+  &.layoutHorizontal {
+    grid-template-columns: var(--field-label-width, 150px) 1fr;
+    gap: var(--field-spacing-l);
+    align-items: start;
+  }
+
+  // Vertical layout
+  &.layoutVertical {
+    grid-template-columns: 1fr;
+    gap: var(--field-spacing-s);
+  }
+
+  // No label but still aligns with other fields
+  &.noLabel {
+    &.layoutHorizontal {
+      grid-template-columns: var(--field-label-width, 150px) 1fr;
+
+      .fieldContent {
+        grid-column: 2;
+      }
+    }
+
+    &.layoutVertical {
+      grid-template-columns: 1fr;
+
+      .fieldContent {
+        grid-column: 1;
+      }
+    }
+  }
+
+  &.disabled {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  // Responsive behavior
+  @include theme.tablet-up {
+    &.layoutHorizontal {
+      grid-template-columns: 120px 1fr;
+      gap: var(--field-spacing-m);
+    }
+  }
+
+  @include theme.mobile-only {
+    &.layoutHorizontal {
+      grid-template-columns: 1fr;
+      gap: var(--field-spacing-s);
+
+      .fieldLabel {
+        margin-bottom: var(--field-spacing-xs);
+      }
+    }
+
+    &.noLabel.layoutHorizontal {
+      .fieldContent {
+        grid-column: 1;
+      }
+    }
+  }
+}
+
+.fieldLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--field-spacing-xs);
+  color: var(--field-label-color);
+  font-weight: var(--card-font-weight-semibold);
+  font-size: var(--field-font-size-m);
+  line-height: var(--field-line-height);
+
+  &.wrapNormal {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  &.wrapBreakWord {
+    word-break: break-word;
+  }
+
+  &.wrapNowrap {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.labelText {
+  flex: 1;
+  min-width: 0;
+}
+
+.requiredIndicator {
+  color: var(--field-label-required-color);
+  font-weight: var(--card-font-weight-bold);
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.infoButton {
+  @extend %button-base;
+
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--card-theme-neutral-tertiary);
+  color: var(--card-theme-white);
+  font-size: 10px;
+  font-weight: var(--card-font-weight-bold);
+  flex-shrink: 0;
+  margin-left: var(--field-spacing-xs);
+
+  &:hover {
+    background: var(--card-theme-neutral-secondary);
+    transform: none;
+    box-shadow: none;
+  }
+
+  &:focus-visible {
+    outline-offset: 1px;
+  }
+}
+
+.fieldContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--field-spacing-s);
+  min-width: 0;
+}
+
+.fieldInput {
+  position: relative;
+}
+
+.fieldDescription {
+  font-size: var(--field-font-size-s);
+  line-height: var(--field-line-height);
+  margin-top: var(--field-spacing-xs);
+
+  &.variantHelp {
+    color: var(--field-description-color);
+  }
+
+  &.variantInfo {
+    color: var(--card-theme-info);
+  }
+
+  &.variantWarning {
+    color: var(--card-theme-warning);
+    font-weight: var(--card-font-weight-semibold);
+  }
+}
+
+.fieldError {
+  font-size: var(--field-font-size-s);
+  color: var(--field-error-color);
+  font-weight: var(--card-font-weight-semibold);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--field-spacing-xs);
+  margin-top: var(--field-spacing-xs);
+
+  &.animationSlide {
+    overflow: hidden;
+    transition: all var(--component-animation-normal) var(--component-easing-standard);
+
+    &.enter {
+      max-height: 0;
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+
+    &.enterActive {
+      max-height: 100px;
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    &.exit {
+      max-height: 100px;
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    &.exitActive {
+      max-height: 0;
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+  }
+
+  &.animationFade {
+    transition: opacity var(--component-animation-fast) var(--component-easing-standard);
+
+    &.enter { opacity: 0; }
+    &.enterActive { opacity: 1; }
+    &.exit { opacity: 1; }
+    &.exitActive { opacity: 0; }
+  }
+
+  &.positionInline {
+    display: inline-flex;
+    margin-left: var(--field-spacing-s);
+    margin-top: 0;
+  }
+
+  @include theme.reduced-motion {
+    &.animationSlide,
+    &.animationFade {
+      transition: none;
+    }
+  }
+}
+
+.errorIcon {
+  color: var(--field-error-color);
+  font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+// Field Group Styles
+.fieldGroup {
+  @extend %component-base;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--field-spacing-xl);
+
+  &.spacingCompact {
+    gap: var(--field-spacing-m);
+
+    .field {
+      margin-bottom: var(--field-spacing-m);
+    }
+  }
+
+  &.spacingNormal {
+    gap: var(--field-spacing-l);
+
+    .field {
+      margin-bottom: var(--field-spacing-l);
+    }
+  }
+
+  &.spacingRelaxed {
+    gap: var(--field-spacing-xxl);
+
+    .field {
+      margin-bottom: var(--field-spacing-xxl);
+    }
+  }
+
+  &.layoutVertical {
+    .field {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  &.disabled {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  // Auto label width calculation
+  &.labelWidthAuto {
+    // JavaScript will calculate and set --field-label-width
+  }
+}
+
+// Input field styling when used with Field component
+:global {
+  .field input,
+  .field select,
+  .field textarea {
+    @extend %input-base;
+  }
+
+  .field input[type="checkbox"],
+  .field input[type="radio"] {
+    width: auto;
+    margin-right: var(--field-spacing-s);
+  }
+
+  // Custom input styles
+  .field .customInput {
+    border: 1px solid var(--field-border-color);
+    border-radius: var(--component-border-radius-s);
+    padding: var(--component-spacing-s) var(--component-spacing-m);
+    transition: border-color var(--component-animation-fast) var(--component-easing-standard);
+
+    &:focus {
+      outline: none;
+      border-color: var(--field-focus-color);
+      box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
+    }
+
+    &.error {
+      border-color: var(--field-error-color);
+      box-shadow: 0 0 0 2px rgba(209, 52, 56, 0.2);
+    }
+
+    &:disabled {
+      background: var(--card-theme-neutral-lighter);
+      color: var(--field-disabled-color);
+      cursor: not-allowed;
+    }
+  }
+}
+
+// Accessibility enhancements
+@include theme.high-contrast {
+  .field {
+    border: 1px solid ButtonBorder;
+
+    .fieldLabel {
+      color: ButtonText;
+    }
+
+    .fieldError {
+      color: HighlightText;
+      background: Highlight;
+      padding: 2px 4px;
+      border-radius: 2px;
+    }
+
+    .requiredIndicator {
+      color: HighlightText;
+      background: Highlight;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+  }
+
+  .infoButton {
+    border: 1px solid ButtonBorder;
+    background: ButtonFace;
+    color: ButtonText;
+
+    &:hover {
+      background: Highlight;
+      color: HighlightText;
+    }
+  }
+}
+
+// Print styles
+@media print {
+  .field {
+    break-inside: avoid;
+    margin-bottom: 12px;
+
+    .fieldError {
+      display: none;
+    }
+
+    .infoButton {
+      display: none;
+    }
+  }
+
+  .fieldGroup {
+    break-inside: avoid;
+  }
+}

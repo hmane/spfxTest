@@ -1,0 +1,276 @@
+// SharePoint theme variables - CSS custom properties
+:root {
+  // SharePoint theme colors
+  --card-theme-primary: var(--themePrimary, #0078d4);
+  --card-theme-primary-dark: var(--themeDark, #106ebe);
+  --card-theme-primary-light: var(--themeLight, #c7e0f4);
+  --card-theme-neutral-lighter: var(--neutralLighter, #f8f9fa);
+  --card-theme-neutral-light: var(--neutralLight, #edebe9);
+  --card-theme-neutral-tertiary: var(--neutralTertiary, #a19f9d);
+  --card-theme-neutral-secondary: var(--neutralSecondary, #605e5c);
+  --card-theme-neutral-primary: var(--neutralPrimary, #323130);
+  --card-theme-white: var(--white, #ffffff);
+  --card-theme-success: var(--green, #107c10);
+  --card-theme-error: var(--red, #d13438);
+  --card-theme-warning: var(--yellow, #ffb900);
+  --card-theme-info: var(--themePrimary, #0078d4);
+
+  // Field specific colors
+  --field-label-color: var(--neutralPrimary, #323130);
+  --field-label-required-color: var(--red, #d13438);
+  --field-description-color: var(--neutralSecondary, #605e5c);
+  --field-error-color: var(--red, #d13438);
+  --field-error-background: var(--redLight, #fde7e9);
+  --field-success-color: var(--green, #107c10);
+  --field-border-color: var(--neutralLight, #edebe9);
+  --field-focus-color: var(--themePrimary, #0078d4);
+  --field-disabled-color: var(--neutralTertiary, #a19f9d);
+
+  // Accordion specific colors (inherits from card theme)
+  --accordion-item-border: var(--neutralLight, #edebe9);
+  --accordion-header-hover: var(--neutralLighter, #f8f9fa);
+  --accordion-add-button-color: var(--themePrimary, #0078d4);
+  --accordion-remove-button-color: var(--red, #d13438);
+
+  // Spacing (SharePoint design tokens)
+  --component-spacing-xs: 4px;
+  --component-spacing-s: 8px;
+  --component-spacing-m: 12px;
+  --component-spacing-l: 16px;
+  --component-spacing-xl: 20px;
+  --component-spacing-xxl: 24px;
+
+  // Field specific spacing
+  --field-spacing-xs: 4px;
+  --field-spacing-s: 8px;
+  --field-spacing-m: 12px;
+  --field-spacing-l: 16px;
+  --field-spacing-xl: 20px;
+
+  // Typography (SharePoint design tokens)
+  --card-font-family: var(--fontFamily, 'Segoe UI', 'Segoe UI Web (West European)', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif);
+  --card-font-size-xs: var(--fontSizeSmall, 12px);
+  --card-font-size-s: var(--fontSizeSmall, 12px);
+  --card-font-size-m: var(--fontSizeMedium, 14px);
+  --card-font-size-l: var(--fontSizeLarge, 16px);
+  --card-font-size-xl: var(--fontSizeXLarge, 18px);
+  --card-line-height: 1.4;
+
+  // Font weights
+  --card-font-weight-regular: 400;
+  --card-font-weight-semibold: 600;
+  --card-font-weight-bold: 700;
+
+  // Field typography
+  --field-font-family: var(--fontFamily, 'Segoe UI');
+  --field-font-size-s: var(--fontSizeSmall, 12px);
+  --field-font-size-m: var(--fontSizeMedium, 14px);
+  --field-line-height: 1.4;
+
+  // Border radius
+  --component-border-radius-s: 4px;
+  --component-border-radius-m: 6px;
+  --component-border-radius-l: 8px;
+
+  // Shadows/elevations
+  --component-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+  --component-shadow-2: 0 3px 6px rgba(0, 0, 0, 0.16), 0 3px 6px rgba(0, 0, 0, 0.23);
+  --component-shadow-3: 0 10px 20px rgba(0, 0, 0, 0.19), 0 6px 6px rgba(0, 0, 0, 0.23);
+  --component-shadow-4: 0 14px 28px rgba(0, 0, 0, 0.25), 0 10px 10px rgba(0, 0, 0, 0.22);
+  --component-shadow-5: 0 19px 38px rgba(0, 0, 0, 0.30), 0 15px 12px rgba(0, 0, 0, 0.22);
+
+  // Animation durations
+  --component-animation-fast: 0.2s;
+  --component-animation-normal: 0.3s;
+  --component-animation-slow: 0.4s;
+
+  // Animation easing
+  --component-easing-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --component-easing-decelerate: cubic-bezier(0.0, 0, 0.2, 1);
+  --component-easing-accelerate: cubic-bezier(0.4, 0, 1, 1);
+
+  // Z-index layers
+  --z-index-dropdown: 1000;
+  --z-index-modal: 1050;
+  --z-index-overlay: 1040;
+  --z-index-tooltip: 1070;
+}
+
+// Breakpoints (SharePoint responsive breakpoints)
+$breakpoint-xs: 480px !default;
+$breakpoint-sm: 640px !default;
+$breakpoint-md: 1024px !default;
+$breakpoint-lg: 1366px !default;
+$breakpoint-xl: 1920px !default;
+
+// Mixins for common patterns
+@mixin component-focus {
+  outline: 2px solid var(--card-theme-primary);
+  outline-offset: 2px;
+}
+
+@mixin component-hover {
+  transition: all var(--component-animation-fast) var(--component-easing-standard);
+
+  &:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: var(--component-shadow-2);
+  }
+}
+
+@mixin component-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+@mixin component-loading-shimmer {
+  background: linear-gradient(90deg,
+    var(--card-theme-neutral-lighter) 25%,
+    var(--card-theme-neutral-light) 50%,
+    var(--card-theme-neutral-lighter) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+}
+
+@mixin truncate-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@mixin visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+// Responsive mixins
+@mixin mobile-only {
+  @media (max-width: #{$breakpoint-sm - 1px}) {
+    @content;
+  }
+}
+
+@mixin tablet-up {
+  @media (min-width: #{$breakpoint-sm}) {
+    @content;
+  }
+}
+
+@mixin desktop-up {
+  @media (min-width: #{$breakpoint-md}) {
+    @content;
+  }
+}
+
+@mixin large-desktop-up {
+  @media (min-width: #{$breakpoint-lg}) {
+    @content;
+  }
+}
+
+// Accessibility mixins
+@mixin high-contrast {
+  @media (forced-colors: active) {
+    @content;
+  }
+}
+
+@mixin reduced-motion {
+  @media (prefers-reduced-motion: reduce) {
+    @content;
+  }
+}
+
+// Component base styles
+%component-base {
+  font-family: var(--card-font-family);
+  font-size: var(--card-font-size-m);
+  line-height: var(--card-line-height);
+  color: var(--card-theme-neutral-primary);
+  box-sizing: border-box;
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: inherit;
+  }
+}
+
+// Button base styles
+%button-base {
+  @extend %component-base;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--component-spacing-s);
+  padding: var(--component-spacing-s) var(--component-spacing-m);
+  border: 1px solid transparent;
+  border-radius: var(--component-border-radius-s);
+  background: transparent;
+  cursor: pointer;
+  font-weight: var(--card-font-weight-semibold);
+  text-decoration: none;
+  transition: all var(--component-animation-fast) var(--component-easing-standard);
+  white-space: nowrap;
+  user-select: none;
+
+  &:focus-visible {
+    @include component-focus;
+  }
+
+  &:disabled {
+    @include component-disabled;
+  }
+
+  @include reduced-motion {
+    transition: none;
+  }
+}
+
+// Input base styles
+%input-base {
+  @extend %component-base;
+
+  display: block;
+  width: 100%;
+  padding: var(--component-spacing-s) var(--component-spacing-m);
+  border: 1px solid var(--field-border-color);
+  border-radius: var(--component-border-radius-s);
+  background: var(--card-theme-white);
+  transition: border-color var(--component-animation-fast) var(--component-easing-standard);
+
+  &:focus {
+    outline: none;
+    border-color: var(--field-focus-color);
+    box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
+  }
+
+  &:disabled {
+    background: var(--card-theme-neutral-lighter);
+    color: var(--field-disabled-color);
+    cursor: not-allowed;
+  }
+
+  &::placeholder {
+    color: var(--card-theme-neutral-tertiary);
+  }
+
+  @include reduced-motion {
+    transition: none;
+  }
+}

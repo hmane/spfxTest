@@ -1,0 +1,85 @@
+{
+	"name": "spfx-component-library",
+	"version": "1.0.0",
+	"description": "A collection of reusable components for SharePoint Framework applications (SPFx v1.20.0+)",
+	"main": "lib/index.js",
+	"types": "lib/index.d.ts",
+	"files": [
+		"lib/**/*",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"build": "npm run clean && npm run compile && npm run build:styles",
+		"build:dev": "npm run clean && npm run compile:dev && npm run build:styles",
+		"build:styles": "gulp build-styles",
+		"clean": "rimraf lib dist",
+		"compile": "tsc -p tsconfig.build.json",
+		"compile:dev": "tsc -p tsconfig.dev.json",
+		"dev": "npm run compile:dev && concurrently \"tsc -p tsconfig.dev.json --watch\" \"gulp watch-styles\"",
+		"watch": "npm run dev",
+		"watch:styles": "gulp watch-styles",
+		"prepublishOnly": "npm run build",
+		"prepare": "npm run build:dev",
+		"link:prepare": "npm run build:dev && npm link",
+		"link:watch": "npm run dev",
+		"lint": "eslint src/**/*.{ts,tsx}",
+		"lint:fix": "eslint src/**/*.{ts,tsx} --fix"
+	},
+	"keywords": [
+		"spfx",
+		"sharepoint",
+		"react",
+		"components",
+		"typescript",
+		"pnpjs",
+		"office365"
+	],
+	"author": "",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://your-ado-repo-url"
+	},
+	"engines": {
+		"node": ">=18.17.1 <19.0.0 || >=20.10.0 <21.0.0"
+	},
+	"peerDependencies": {
+		"react": "17.0.1",
+		"react-dom": "17.0.1",
+		"@microsoft/sp-core-library": "1.20.0",
+		"@microsoft/sp-webpart-base": "1.20.0",
+		"@microsoft/sp-property-pane": "1.20.0",
+		"@microsoft/sp-lodash-subset": "1.20.0",
+		"@microsoft/sp-extension-base": "1.20.0",
+		"@pnp/sp": ">=3.0.0",
+		"@pnp/spfx-property-controls": "3.21.0",
+		"@pnp/graph": ">=3.0.0",
+		"@pnp/logging": ">=3.0.0",
+		"@pnp/queryable": ">=4.16.0",
+		"react-hook-form": "^7.0.0",
+		"@microsoft/applicationinsights-web": "3.3.9",
+		"@microsoft/sp-listview-extensibility": "1.21.1"
+	},
+	"devDependencies": {
+		"@types/node": "^24.1.0",
+		"@types/react": "17.0.45",
+		"@types/react-dom": "17.0.17",
+		"@typescript-eslint/eslint-plugin": "^5.0.0",
+		"@typescript-eslint/parser": "^5.0.0",
+		"autoprefixer": "^10.4.14",
+		"concurrently": "^7.6.0",
+		"eslint": "^8.0.0",
+		"eslint-plugin-react": "^7.0.0",
+		"eslint-plugin-react-hooks": "^4.0.0",
+		"gulp": "^4.0.2",
+		"gulp-postcss": "^9.0.1",
+		"gulp-rename": "^2.0.0",
+		"gulp-sass": "^5.1.0",
+		"gulp-sourcemaps": "^3.0.0",
+		"postcss": "^8.4.21",
+		"rimraf": "^3.0.0",
+		"sass": "^1.57.1",
+		"typescript": "^4.9.4"
+	}
+}

@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ES2019",
+		"lib": ["ES2019", "DOM"],
+		"module": "CommonJS",
+		"moduleResolution": "node",
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"outDir": "./lib",
+		"rootDir": "./src",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"jsx": "react-jsx",
+		"allowSyntheticDefaultImports": true,
+		"resolveJsonModule": true,
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"isolatedModules": true,
+		"typeRoots": ["node_modules/@types", "src/types", "lib"]
+	},
+	"include": ["src/**/*", "src/types/**/*", "lib/scss.d.ts"],
+	"exclude": ["node_modules", "lib", "dist", "**/*.scss"]
+}

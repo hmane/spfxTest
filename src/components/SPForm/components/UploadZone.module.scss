@@ -1,0 +1,44 @@
+.zone {
+  border: 1px dashed #c8c6c4;
+  border-radius: 10px;
+  padding: 16px;
+  background: #fff;
+  transition: border-color .15s ease, background .15s ease;
+
+  &:hover {
+    border-color: #8a8886;
+    background: #faf9f8;
+  }
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px;
+  border-radius: 8px;
+
+  &:hover {
+    background: #f3f2f1;
+  }
+}
+
+.fileIcon {
+  width: 20px;
+  height: 20px;
+}
+
+.fileMeta {
+  flex: 1;
+  min-width: 0; // ellipsis
+  .name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .size {
+    color: #605e5c; font-size: 12px;
+  }
+}
+
+.overall {
+  margin-top: 8px;
+}
