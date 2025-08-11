@@ -9,12 +9,11 @@ export class Semaphore {
 			const tryRun = () => {
 				if (this.running < this.max) {
 					this.running++;
-					const release = () => {
+					resolve(() => {
 						this.running = Math.max(0, this.running - 1);
 						const job = this.queue.shift();
 						if (job) job();
-					};
-					resolve(release);
+					});
 				} else {
 					this.queue.push(tryRun);
 				}
