@@ -1,31 +1,32 @@
-// src/webparts/UploadAndEdit/services/sharepoint.ts
-
-import { SPFx as PnP_SPFX, spfi, SPFI } from '@pnp/sp';
-
-// Bring in SP features (extends prototypes & typings)
-import '@pnp/sp/content-types/list'; // list.contentTypes()
+// PnPjs features (extend SPFI surface)
+import '@pnp/sp/content-types/list';
 import '@pnp/sp/files';
 import '@pnp/sp/folders';
 import '@pnp/sp/items';
 import '@pnp/sp/lists';
 import '@pnp/sp/webs';
 
+import type { SPFI } from '@pnp/sp';
 import type { IFileUploadProgressData } from '@pnp/sp/files';
 
+import { Context } from '../../context/pnpjs-config';
 import { ContentTypeInfo, OverwritePolicy, SharePointService } from '../types';
-
 import { encodePathSegments, safeJoinPath, trimTrailingSlash, withNumericSuffix } from '../utils';
 
 /**
- * Factory: create a service bound to the current site/context.
+ * Factory: create a service bound to the *current* Context hub.
+ * Call this from your WebPart after Context.setContext(...) has run in onInit().
  */
-export function createSharePointService(siteUrl: string, spfxContext: any): SharePointServiceImpl {
-	const sp = spfi(siteUrl).using(PnP_SPFX(spfxContext));
-	return new SharePointServiceImpl(sp);
+export function createSharePointService(): SharePointServiceImpl {
+	const { sp, logger } = Context.getContext();
+	return new SharePointServiceImpl(sp, logger);
 }
 
 export class SharePointServiceImpl implements SharePointService {
-	constructor(private readonly sp: SPFI) {}
+	constructor(
+		private readonly sp: SPFI,
+		private readonly logger?: { info: Function; verbose: Function; error: Function }
+	) {}
 
 	/**
 	 * Ensure (create if needed) nested folder path inside a document library.
@@ -45,10 +46,12 @@ export class SharePointServiceImpl implements SharePointService {
 		for (const seg of segments) {
 			current = `${current}/${seg}`;
 			try {
+				// Does folder exist?
 				await this.sp.web
 					.getFolderByServerRelativePath(encodePathSegments(current))
 					.select('ServerRelativeUrl')();
 			} catch {
+				// Create under parent
 				const parent = current.substring(0, current.lastIndexOf('/'));
 				await this.sp.web
 					.getFolderByServerRelativePath(encodePathSegments(parent))
@@ -97,12 +100,13 @@ export class SharePointServiceImpl implements SharePointService {
 		onProgress: (pct: number) => void,
 		overwritePolicy: OverwritePolicy
 	): Promise<{ itemId: number }> {
+		const progress = onProgress ?? (() => {});
 		const folder = await this.getTargetFolder(libraryUrl, folderPath);
 		const folderApi = this.sp.web.getFolderByServerRelativePath(
 			encodePathSegments(folder.serverRelativeUrl)
 		);
 
-		// Name + existence
+		// Determine target file name, honoring overwrite policy
 		let serverFileName = file.name;
 		const exists = await this.fileExists(libraryUrl, folderPath, serverFileName);
 
@@ -116,22 +120,26 @@ export class SharePointServiceImpl implements SharePointService {
 			// overwrite -> handled by Overwrite flag below
 		}
 
-		// New v3 signature: addChunked(name, file, { progress, Overwrite, chunkSize? })
+		this.logger?.verbose?.('Uploading file (chunked)…', { libraryUrl, folderPath, serverFileName });
+
 		const result: any = await folderApi.files.addChunked(serverFileName, file, {
 			progress: (data: IFileUploadProgressData) => {
 				// IFileUploadProgressData: { uploadId, stage, offset }
 				if (typeof data?.offset === 'number' && file.size > 0) {
 					const pct = Math.min(100, Math.max(0, Math.round((data.offset / file.size) * 100)));
-					onProgress(pct);
+					progress(pct);
 				}
 			},
 			Overwrite: overwritePolicy === 'overwrite',
-			// chunkSize?: number // keep default (10 MB)
+			// chunkSize?: number // default (10 MB). You can expose if needed.
 		});
 
 		const item = await result.file.getItem();
 		const info: any = await item.select('Id')();
-		onProgress(100);
+		progress(100);
+
+		this.logger?.info?.('Upload complete', { itemId: info?.Id, name: serverFileName });
+
 		return { itemId: info?.Id as number };
 	}
 
@@ -191,6 +199,7 @@ export class SharePointServiceImpl implements SharePointService {
 	private async findSuffixName(folderServerUrl: string, originalName: string): Promise<string> {
 		for (let i = 1; i < 1000; i++) {
 			const candidate = withNumericSuffix(originalName, i);
+			// Here we treat the folder path as the "library root" and pass no folderPath, which resolves to that exact folder.
 			if (!(await this.fileExists(folderServerUrl, undefined, candidate))) return candidate;
 		}
 		throw new Error('Could not find an available file name after 999 attempts.');
