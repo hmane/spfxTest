@@ -2,19 +2,12 @@
  * context/pnpjs-config.ts
  * --------------------------------------------------------------
  * Single source of truth for SPFx context + PnPjs (SP & Graph).
- * - Call `Context.setContext(this.context, options?)` ONCE in onInit()
- * - Anywhere else: `const ctx = Context.getContext();`
- *   - ctx.sp / ctx.graph  → default PnP instances
- *   - cache flavors       → spNoCache/spShortCached/spLongCached/spPessimisticRefresh (and Graph equivalents)
- *   - ctx.http            → SP/AAD/Flow HTTP gateway (timeout/retries/AI telemetry/concurrency)
- *   - ctx.links           → context-bound link builders (no webUrl param needed)
- *   - ctx.logger          → shared logger (Console + optional Diagnostics + optional AppInsights)
  *
- * URL overrides for dev (optional):
- *   ?spctxlog=0..4|verbose|info|warning|error
- *   ?spctxcache=none|short|long|pess
- *   ?spctxtimeout=45000
- *   ?spctxtelemetry=1|0
+ * Call once in your host's onInit():
+ *   Context.setContext(this.context, { componentName: "My WebPart", ...options })
+ *
+ * Then anywhere:
+ *   const { sp, graph, http, links, logger, env, isProdSite, buildMode, envBadge } = Context.getContext();
  */
 
 import { LogLevel, Logger } from '@pnp/logging';
@@ -37,20 +30,19 @@ import { initAppInsights } from '../net/telemetry';
 import { HttpGateway } from '../net/http';
 import { buildLinks } from '../utils/links';
 import { assert } from '../utils/assert';
-import type { CacheTTL, ContextOptions, SPContext } from '../utils/types';
+import type { CacheTTL, ContextOptions, EnvName, SPContext } from '../utils/types';
 
-// ---------- constants (cache TTLs, default timeout) ----------
+// ---------- constants ----------
 const TTL_SHORT_MS = 5 * 60 * 1000; // 5 minutes
-const TTL_LONG_MS = 24 * 60 * 60 * 1000; // 1 day
+const TTL_LONG_MS = 24 * 60 * 60 * 1000; // 24 hours
 const REQ_TIMEOUT_MS = 45_000; // 45 seconds default
 
 // ---------- helpers ----------
-/** Correlation id to stitch logs/requests across modules */
 function newCorrelationId(): string {
 	return `spctx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** v3 expects a Date, not a number, for expireFunc */
+/** v3 expects Date from expireFunc */
 function cacheBehavior(ttlMs: number) {
 	return Caching({
 		store: 'local',
@@ -66,7 +58,6 @@ function pessimisticBehavior(ttlMs: number) {
 	});
 }
 
-/** Support both numeric and string log levels via querystring */
 function parseLogLevel(raw?: string | null): LogLevel | undefined {
 	if (!raw) return undefined;
 	const n = Number(raw);
@@ -116,6 +107,76 @@ function readUrlOverrides(): Partial<
 	}
 }
 
+/** Build mode from bundler */
+function getBuildMode(): 'production' | 'development' | 'test' | 'unknown' {
+	const v = (process?.env?.NODE_ENV as string | undefined) || '';
+	if (v === 'production' || v === 'development' || v === 'test') return v;
+	return 'unknown';
+}
+
+/**
+ * Detect site env by your path rules:
+ *  - /debug{SITE_NAME} → dev
+ *  - /dev{SITE_NAME}   → dev
+ *  - /uat{SITE_NAME}   → uat
+ *  - /{SITE_NAME}      → prod
+ */
+function detectSiteEnv(webAbsoluteUrl: string, webServerRelativeUrl: string): EnvName {
+	try {
+		const path = (webServerRelativeUrl || new URL(webAbsoluteUrl).pathname || '/').toLowerCase();
+		const seg = path.startsWith('/') ? path.slice(1) : path;
+		const first = seg.split('/')[0] || '';
+		if (first.startsWith('debug')) return 'dev';
+		if (first.startsWith('dev')) return 'dev';
+		if (first.startsWith('uat')) return 'uat';
+		return 'prod';
+	} catch {
+		return 'prod';
+	}
+}
+
+/** Optional query override: ?spctxenv=dev|uat|prod */
+function readEnvOverride(): EnvName | undefined {
+	try {
+		const v = new URLSearchParams(window.location.search).get('spctxenv');
+		if (!v) return undefined;
+		const x = v.toLowerCase();
+		return x === 'dev' || x === 'uat' || x === 'prod' ? (x as EnvName) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Small UI helper for an environment badge */
+function makeEnvBadge(
+	env: EnvName,
+	isProdBuild: boolean
+): () => { text: string; color: string; tooltip: string } {
+	return () => {
+		switch (env) {
+			case 'dev':
+				return {
+					text: 'DEV',
+					color: '#6D28D9',
+					tooltip: `${isProdBuild ? 'Prod build' : 'Dev build'} on DEV site`,
+				};
+			case 'uat':
+				return {
+					text: 'UAT',
+					color: '#F59E0B',
+					tooltip: `${isProdBuild ? 'Prod build' : 'Dev build'} on UAT site`,
+				};
+			case 'prod':
+			default:
+				return {
+					text: 'PROD',
+					color: isProdBuild ? '#059669' : '#9CA3AF',
+					tooltip: `${isProdBuild ? 'Prod build' : 'Dev build'} on PROD site`,
+				};
+		}
+	};
+}
+
 // ---------- singleton hub ----------
 class ContextHub {
 	private static _instance: ContextHub | null = null;
@@ -125,71 +186,72 @@ class ContextHub {
 
 	private _ctx?: SPContext;
 
-	/** Has setContext been called? */
 	isReady() {
 		return !!this._ctx;
 	}
-
-	/** Return the initialized context (throws if not ready) */
 	getContext(): SPContext {
 		assert(!!this._ctx, 'ContextHub not initialized. Call setContext() in onInit() first.');
 		return this._ctx!;
 	}
 
-	/**
-	 * Initialize once in your host's onInit():
-	 *   Context.setContext(this.context, { appInsightsKey: "...", enableDiagnosticsSink: true })
-	 */
 	setContext(ctx: WebPartContext | BaseComponentContext, options?: ContextOptions): SPContext {
 		const pc = (ctx as any).pageContext as PageContext;
 		assert(!!pc, 'ContextHub.setContext: missing pageContext');
 
-		// 1) resolve options + url overrides
+		const webAbs = pc?.web?.absoluteUrl ?? '';
+		const webRel = pc?.web?.serverRelativeUrl ?? '';
+
+		// ----- env & build detection -----
+		const envOverride = readEnvOverride();
+		const siteEnv: EnvName = envOverride ?? detectSiteEnv(webAbs, webRel);
+		const isProdSite = siteEnv === 'prod';
+		const buildMode = getBuildMode();
+		const isProdBuild = buildMode === 'production';
+
+		// ----- dev URL overrides + options -----
 		const ov = readUrlOverrides();
-		const logLevel = ov.logLevel ?? options?.logLevel ?? LogLevel.Warning;
+		const logLevel =
+			ov.logLevel ?? options?.logLevel ?? (isProdSite ? LogLevel.Warning : LogLevel.Info);
 		const defaultCache: CacheTTL = ov.defaultCache ?? options?.defaultCache ?? 'short';
 		const timeoutMs = ov.timeoutMs ?? options?.timeoutMs ?? REQ_TIMEOUT_MS;
 		const enableTelemetry =
 			ov.enableTelemetry ?? options?.enableTelemetry ?? !!options?.appInsightsKey;
 
-		// apply global PnP log level (affects @pnp/logging subscribers)
 		Logger.activeLogLevel = logLevel;
 
-		// 2) bootstrap logger (+ sinks)
+		// ----- logger (+ sinks) -----
 		const correlationId = newCorrelationId();
 		const logger = createLogger({
 			level: logLevel,
 			defaultCategory: options?.componentName ?? 'App',
 			enrich: () => ({
 				correlationId,
+				env: siteEnv,
+				isProdSite,
+				buildMode,
+				isProdBuild,
 				siteUrl: pc?.site?.absoluteUrl || '',
-				webUrl: pc?.web?.absoluteUrl || '',
+				webUrl: webAbs || '',
 				user: pc?.user?.loginName || '',
 			}),
 			redactor: redactDeep,
 		});
-		// Always log to browser console
 		logger.addSink(new ConsoleSink());
-		// Optional: SPFx Developer Console (enable via option)
 		if (options?.enableDiagnosticsSink) logger.addSink(new DiagnosticsSink());
 
-		// Optional: Application Insights sink
 		let ai = undefined as ReturnType<typeof initAppInsights> | undefined;
 		if (enableTelemetry && options?.appInsightsKey) {
 			ai = initAppInsights(options.appInsightsKey, options.aiRoleName ?? 'SPFxApp');
 			logger.addSink(new AppInsightsSink(ai));
-			// Bridge legacy PnP logger to our sinks (so old code logs consistently)
 			bridgePnPLoggerToSinks(logger);
 		}
 
-		// 3) create PnP instances (SP & Graph) + caching “flavors”
-		//    (no custom queryable behaviors so it compiles cleanly with @pnp/sp 3.20.x)
+		// ----- PnP instances + cache flavors -----
 		const spBase = spfi().using(SPFxBind(ctx));
 		const spNoCache = spBase;
 		const spShortCached = spBase.using(cacheBehavior(TTL_SHORT_MS));
 		const spLongCached = spBase.using(cacheBehavior(TTL_LONG_MS));
 		const spPessimisticRefresh = spBase.using(pessimisticBehavior(TTL_LONG_MS));
-
 		const spDefault =
 			defaultCache === 'none'
 				? spNoCache
@@ -204,7 +266,6 @@ class ContextHub {
 		const graphShortCached = gBase.using(cacheBehavior(TTL_SHORT_MS));
 		const graphLongCached = gBase.using(cacheBehavior(TTL_LONG_MS));
 		const graphPessimisticRefresh = gBase.using(pessimisticBehavior(TTL_LONG_MS));
-
 		const graphDefault =
 			defaultCache === 'none'
 				? graphNoCache
@@ -214,7 +275,7 @@ class ContextHub {
 				? graphPessimisticRefresh
 				: graphShortCached;
 
-		// 4) HTTP gateway (central timeout/retry/concurrency + AI dependency telemetry)
+		// ----- HTTP gateway -----
 		const http = new HttpGateway(ctx, {
 			timeoutMs,
 			retries: 3,
@@ -224,12 +285,11 @@ class ContextHub {
 			maxConcurrent: 6,
 		});
 
-		// 5) Build the fully-bound context object
+		// ----- finalize context -----
 		const sc: SPContext = {
 			context: ctx,
 			pageContext: pc,
 
-			// PnP instances
 			sp: spDefault,
 			graph: graphDefault,
 
@@ -243,14 +303,13 @@ class ContextHub {
 			graphLongCached,
 			graphPessimisticRefresh,
 
-			// env/meta
 			logLevel,
 			correlationId,
 
 			siteUrl: pc?.site?.absoluteUrl ?? '',
 			webUrl: pc?.web?.absoluteUrl ?? '',
 			webRelativeUrl: pc?.web?.serverRelativeUrl ?? '',
-			webAbsoluteUrl: pc?.web?.absoluteUrl ?? '',
+			webAbsoluteUrl: webAbs,
 			siteId: (pc as any)?.site?.id?.toString?.() ?? (pc as any)?.site?.id ?? '',
 			webId: (pc as any)?.web?.id?.toString?.() ?? (pc as any)?.web?.id ?? '',
 			webTitle: pc?.web?.title ?? '',
@@ -262,18 +321,16 @@ class ContextHub {
 			isTeams: !!(pc as any)?.legacyPageContext?.isTeamsContext,
 			isClassicPage: !!(pc as any)?.legacyPageContext?.isClassicPage,
 
-			// helpers
 			http,
-			links: buildLinks({
-				webAbsoluteUrl: pc?.web?.absoluteUrl ?? '',
-				webRelativeUrl: pc?.web?.serverRelativeUrl ?? '',
-			}),
+			links: buildLinks({ webAbsoluteUrl: webAbs, webRelativeUrl: webRel }),
 			logger,
 
-			/**
-			 * Create a new SPFI scoped to another Web URL, with a chosen cache flavor.
-			 * Useful for cross-site reads without re-initializing the hub.
-			 */
+			env: siteEnv,
+			isProdSite,
+			buildMode,
+			isProdBuild,
+			envBadge: makeEnvBadge(siteEnv, isProdBuild),
+
 			forWeb: (webUrl: string, cache: CacheTTL = 'short'): SPFI => {
 				const base = spfi(webUrl).using(SPFxBind(ctx));
 				switch (cache) {
@@ -288,15 +345,6 @@ class ContextHub {
 				}
 			},
 
-			/**
-			 * Temporarily switch both SP & Graph to a specific cache flavor for a block of work.
-			 * Example:
-			 *   const result = await Context.getContext().with("long", async (sp, graph) => {
-			 *     const items = await sp.web.lists.getByTitle("Catalog").items.top(500)();
-			 *     const me = await graph.me();
-			 *     return { items, me };
-			 *   });
-			 */
 			with: async <T>(cache: CacheTTL, fn: (sp: SPFI, graph: GraphFI) => Promise<T>) => {
 				const spSel =
 					cache === 'none'
@@ -320,17 +368,25 @@ class ContextHub {
 			},
 		};
 
-		// 6) stash + dev handle
 		this._ctx = sc;
+
 		if (process.env.NODE_ENV !== 'production') {
-			(window as any).__spctx = { get: () => this._ctx, logLevel, defaultCache, timeoutMs };
+			(window as any).__spctx = {
+				get: () => this._ctx,
+				env: siteEnv,
+				buildMode,
+				logLevel,
+				defaultCache,
+				timeoutMs,
+			};
 		}
 
-		// 7) hello world log
 		logger.banner(`Context ready • ${pc?.web?.title || 'Web'}`, {
 			site: sc.siteUrl,
 			web: sc.webUrl,
 			user: sc.currentUserLoginName,
+			env: siteEnv,
+			buildMode,
 			correlationId,
 		});
 
@@ -338,7 +394,6 @@ class ContextHub {
 	}
 }
 
-// ---------- public exports ----------
 export const Context = ContextHub.instance;
 export const getSp = () => Context.getContext().sp;
 export const getGraph = () => Context.getContext().graph;
