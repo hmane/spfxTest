@@ -59,7 +59,8 @@
 		"@pnp/queryable": ">=4.16.0",
 		"react-hook-form": "^7.0.0",
 		"@microsoft/applicationinsights-web": "3.3.9",
-		"@microsoft/sp-listview-extensibility": "1.21.1"
+		"@microsoft/sp-listview-extensibility": "1.21.1",
+		"@pnp/spfx-controls-react": "3.22.0"
 	},
 	"devDependencies": {
 		"@types/node": "^24.1.0",

@@ -1,29 +1,23 @@
 import * as React from 'react';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { useToasts } from './ToastHost';
+import { useMemo, useState } from 'react';
 import {
 	Stack,
-	Text,
 	Dialog,
 	DialogType,
-	Spinner,
 	MessageBar,
 	MessageBarType,
+	PrimaryButton,
+	Text,
 } from '@fluentui/react';
 
 import {
-	ContentTypeInfo,
 	DestinationChoice,
-	FileProgress,
-	LauncherMetrics,
-	LauncherOpenInfo,
 	LauncherDeterminedInfo,
+	LauncherOpenInfo,
 	LibraryOption,
 	OverwritePolicy,
 	PickerMode,
 	RenderMode,
-	UploadAndEditState,
-	UploadAndEditWebPartProps,
 	UploadBatchResult,
 	UploadSelectionScope,
 } from '../types';
@@ -32,232 +26,270 @@ import { createSharePointService } from '../services/sharepoint';
 import { DestinationPicker } from './DestinationPicker';
 import { UploadZone } from './UploadZone';
 import { LibraryItemEditorLauncher } from './editor/LibraryItemEditorLauncher';
+import { useToasts } from './ToastHost';
+import { Placeholder } from '@pnp/spfx-controls-react/lib/Placeholder';
+import { DragDropFiles } from '@pnp/spfx-controls-react/lib/DragDropFiles';
 
 type Props = {
-	// SPFx context + site
 	siteUrl: string;
 	spfxContext: any;
 
-	// Web part configuration
 	pickerMode: PickerMode;
 	renderMode: RenderMode;
 	selectionScope: UploadSelectionScope;
-	allowFolderSelection: boolean;
 	showContentTypePicker: boolean;
-	overwritePolicy: OverwritePolicy;
 
 	libraries: LibraryOption[];
-	defaultLibrary?: string;
 	globalAllowedContentTypeIds?: string[] | 'all';
 
-	// Editor behavior
+	overwritePolicy: OverwritePolicy;
+
 	enableBulkAutoRefresh: boolean;
 	bulkWatchAllItems: boolean;
 
-	// UI bits
 	buttonLabel?: string;
 	dropzoneHint?: string;
 	successToast?: string;
 
-	// Accessibility & perf
 	disableDomNudges: boolean;
 	sandboxExtra?: string;
 
-	// Minimal view for bulk edit if you want (per library overrides exist on LibraryOption too)
-	minimalViewId?: string;
-
-	// External loader hooks (optional)
 	showLoading?: (msg?: string) => void;
 	hideLoading?: () => void;
+
+	// Optional: async confirm overwrite hook (true = overwrite, false = skip)
+	confirmOverwrite?: (fileName: string) => Promise<boolean>;
 };
 
 export const UploadAndEditApp: React.FC<Props> = (props) => {
 	const {
 		siteUrl,
 		spfxContext,
-
 		pickerMode,
 		renderMode,
 		selectionScope,
-		allowFolderSelection,
 		showContentTypePicker,
-		overwritePolicy,
-
 		libraries,
-		defaultLibrary,
 		globalAllowedContentTypeIds,
-
+		overwritePolicy,
 		enableBulkAutoRefresh,
 		bulkWatchAllItems,
-
 		buttonLabel = 'Upload files',
 		dropzoneHint = 'Drag & drop files here, or click Select files',
 		successToast,
-
 		disableDomNudges,
 		sandboxExtra,
-		minimalViewId,
-
 		showLoading,
 		hideLoading,
+		confirmOverwrite,
 	} = props;
 
-    const { push } = useToasts();
-
 	const spService = useMemo(
-		() => createSharePointService(siteUrl, spfxContext),
+		() => createSharePointService(),
 		[siteUrl, spfxContext]
 	);
+	const { push } = useToasts();
 
-	// -------------- Orchestration state --------------
-	const [stage, setStage] = useState<'destination' | 'upload' | 'editing' | 'idle'>('destination');
-	const [dialogOpen, setDialogOpen] = useState<boolean>(true);
-
+	const [dialogOpen, setDialogOpen] = useState(false);
+	const [stage, setStage] = useState<'destination' | 'upload' | 'editing' | 'idle'>('idle');
 	const [choice, setChoice] = useState<DestinationChoice | undefined>();
+	const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 	const [uploadedItemIds, setUploadedItemIds] = useState<number[]>([]);
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-	// -------------- Stage 1: Destination --------------
+	const isConfigured = useMemo(() => Array.isArray(libraries) && libraries.length > 0, [libraries]);
+
+	// Button click uses a hidden input for “select files”
+	const fileInputRef = React.useRef<HTMLInputElement>(null);
+	const allowMultiple = selectionScope === 'multiple';
+
+	const handleFilesPicked = (files: File[]) => {
+		if (!files?.length) return;
+		setPendingFiles(allowMultiple ? files : [files[0]]);
+		setDialogOpen(true);
+		setStage('destination');
+	};
+
+	// Destination
 	const handleDestinationSubmit = (c: DestinationChoice) => {
 		setChoice(c);
 		setStage('upload');
 	};
-
 	const handleDestinationCancel = () => {
 		setDialogOpen(false);
 		setStage('idle');
+		setPendingFiles([]);
+		setUploadedItemIds([]);
 	};
 
-	// -------------- Stage 1b: Upload --------------
+	// Upload
 	const handleBatchComplete = (res: UploadBatchResult) => {
 		setUploadedItemIds(res.itemIds);
 		if (res.itemIds.length)
 			push({
 				kind: 'success',
-				text: `Uploaded ${res.itemIds.length} file(s). Opening properties…`,
+				text: `Uploaded ${res.itemIds.length} file${
+					res.itemIds.length > 1 ? 's' : ''
+				}. Opening properties…`,
 			});
 		if (res.failed.length)
-			push({ kind: 'warning', text: `${res.failed.length} file(s) skipped/failed.` });
+			push({
+				kind: 'warning',
+				text: `${res.failed.length} file${res.failed.length > 1 ? 's' : ''} skipped/failed.`,
+			});
+		showLoading?.('Preparing edit form…');
 		setStage('editing');
 	};
-
-
-
 	const handleBatchCanceled = () => {
-		// back to destination or close?
 		setStage('destination');
 	};
 
-	// -------------- Stage 2: Edit properties --------------
-	const onLauncherDetermined = (info: LauncherDeterminedInfo) => {
-		// You wanted to hide loading here (component has computed where to go)
+	// Editor
+	const onLauncherDetermined = (_info: LauncherDeterminedInfo) => {
 		hideLoading?.();
 	};
-
-	const onLauncherOpen = (info: LauncherOpenInfo) => {
-		// Telemetry hook; usually no loader actions here
-	};
-
+	const onLauncherOpen = (_info: LauncherOpenInfo) => {};
 	const onLauncherSaved = () => {
-		push({ kind: 'success', text: 'Properties saved.' });
+		push({ kind: 'success', text: (successToast && successToast.trim()) || 'Properties saved.' });
 		setDialogOpen(false);
 		setStage('idle');
+		setPendingFiles([]);
+		setUploadedItemIds([]);
 	};
-
 	const onLauncherDismiss = () => {
 		setDialogOpen(false);
 		setStage('idle');
+		setPendingFiles([]);
+		setUploadedItemIds([]);
+		hideLoading?.();
 	};
 
-	// -------------- Derived: which minimal view to use --------------
-	const viewIdForChoice = useMemo(() => {
-		if (!choice?.libraryUrl) return undefined;
+	// Inject per-library defaultFolder right before upload
+	const choiceWithDefaultFolder = useMemo(() => {
+		if (!choice) return undefined;
 		const libCfg = libraries.find((l) => l.serverRelativeUrl === choice.libraryUrl);
-		return libCfg?.minimalViewId || minimalViewId;
-	}, [choice?.libraryUrl, libraries, minimalViewId]);
+		return { ...choice, folderPath: libCfg?.defaultFolder };
+	}, [choice, libraries]);
 
-	// -------------- Render --------------
 	return (
-		<Dialog
-			hidden={!dialogOpen}
-			onDismiss={() => {
-				setDialogOpen(false);
-				setStage('idle');
-			}}
-			dialogContentProps={{ type: DialogType.close, title: undefined }}
-			minWidth="50%"
-			maxWidth="95%"
-			modalProps={{ isBlocking: true }}
-		>
-			<Stack tokens={{ childrenGap: 16 }}>
-				{errorMsg && (
-					<MessageBar messageBarType={MessageBarType.error} onDismiss={() => setErrorMsg(null)}>
-						{errorMsg}
-					</MessageBar>
-				)}
+		<Stack tokens={{ childrenGap: 16 }}>
+			{!isConfigured ? (
+				<Placeholder
+					iconName="Edit"
+					iconText="Configure this web part"
+					description="Select one or more document libraries in the property pane."
+					buttonLabel="Configure"
+					onConfigure={() =>
+						(window as any).SPPropertyPane && (window as any).SPPropertyPane.open()
+					}
+				/>
+			) : (
+				!dialogOpen && (
+					<DragDropFiles onDrop={(files: Iterable<File> | ArrayLike<File>) => handleFilesPicked(Array.from(files))} dropEffect="copy">
+						<Stack
+							tokens={{ childrenGap: 8 }}
+							styles={{
+								root: {
+									border: '1px dashed #c8c6c4',
+									borderRadius: 10,
+									padding: 16,
+									background: '#fff',
+									textAlign: 'center',
+								},
+							}}
+						>
+							<input
+								ref={fileInputRef}
+								type="file"
+								multiple={allowMultiple}
+								style={{ display: 'none' }}
+								onChange={(e) => {
+									const list = e.target.files;
+									if (list?.length) handleFilesPicked(Array.from(list));
+									e.currentTarget.value = '';
+								}}
+							/>
+							<PrimaryButton
+								text={buttonLabel || (allowMultiple ? 'Upload files' : 'Upload file')}
+								onClick={() => fileInputRef.current?.click()}
+							/>
+							<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
+								{dropzoneHint || (allowMultiple ? 'Drop files here' : 'Drop a file here')}
+							</Text>
+						</Stack>
+					</DragDropFiles>
+				)
+			)}
 
-				{stage === 'destination' && (
-					<DestinationPicker
-						pickerMode={pickerMode}
-						selectionScope={selectionScope}
-						libraries={libraries}
-						defaultLibrary={defaultLibrary}
-						showContentTypePicker={showContentTypePicker}
-						allowFolderSelection={allowFolderSelection}
-						globalAllowedContentTypeIds={globalAllowedContentTypeIds}
-						spService={spService}
-						onSubmit={handleDestinationSubmit}
-						onCancel={handleDestinationCancel}
-						primaryText="Continue"
-						cancelText="Cancel"
-						title="Select destination"
-						subText="Choose where your file(s) will be stored and (optionally) the content type."
-					/>
-				)}
+			{/* One modal that hosts both steps */}
+			<Dialog
+				hidden={!dialogOpen}
+				onDismiss={handleDestinationCancel}
+				dialogContentProps={{ type: DialogType.close, title: undefined }}
+				minWidth="50%"
+				maxWidth="95%"
+				modalProps={{ isBlocking: true }}
+			>
+				<Stack tokens={{ childrenGap: 16 }}>
+					{errorMsg && (
+						<MessageBar messageBarType={MessageBarType.error} onDismiss={() => setErrorMsg(null)}>
+							{errorMsg}
+						</MessageBar>
+					)}
 
-				{stage === 'upload' && choice && (
-					<UploadZone
-						destination={choice}
-						spService={spService}
-						allowMultiple={selectionScope === 'multiple'}
-						overwritePolicy={overwritePolicy}
-						onBatchComplete={handleBatchComplete}
-						onBatchCanceled={handleBatchCanceled}
-						title={buttonLabel}
-						hint={dropzoneHint}
-						confirmOverwrite={async (fileName) => {
-							// your own modal/confirm; return true to overwrite, false to skip
-							//return await myConfirm(`"${fileName}" already exists. Replace it?`);
-                            return true;
-						}}
-					/>
-				)}
+					{stage === 'destination' && (
+						<DestinationPicker
+							pickerMode={pickerMode}
+							libraries={libraries}
+							showContentTypePicker={showContentTypePicker}
+							globalAllowedContentTypeIds={globalAllowedContentTypeIds}
+							spService={spService}
+							onSubmit={handleDestinationSubmit}
+							onCancel={handleDestinationCancel}
+							primaryText="Continue"
+							cancelText="Cancel"
+							title="Select destination"
+							subText="Choose the target library and content type."
+						/>
+					)}
 
-				{stage === 'editing' && choice && uploadedItemIds.length > 0 && (
-					<LibraryItemEditorLauncher
-						siteUrl={siteUrl}
-						libraryServerRelativeUrl={choice.libraryUrl}
-						itemIds={uploadedItemIds}
-						contentTypeId={choice.contentTypeId}
-						viewId={uploadedItemIds.length > 1 ? viewIdForChoice : undefined}
-						renderMode={renderMode} // modal | samepage | newtab
-						isOpen={renderMode === 'modal'} // only render modal content when needed
-						spfxContext={spfxContext}
-						// lifecycle
-						onDetermined={onLauncherDetermined}
-						onOpen={onLauncherOpen}
-						onSaved={onLauncherSaved}
-						onDismiss={onLauncherDismiss}
-						// editor behavior
-						enableBulkAutoRefresh={enableBulkAutoRefresh}
-						bulkWatchAllItems={bulkWatchAllItems}
-						disableDomNudges={disableDomNudges}
-						sandboxExtra={sandboxExtra}
-						// responsive niceties (good defaults baked in the launcher)
-						autoHeightBestEffort
-					/>
-				)}
-			</Stack>
-		</Dialog>
+					{stage === 'upload' && choiceWithDefaultFolder && (
+						<UploadZone
+							destination={choiceWithDefaultFolder}
+							spService={spService}
+							allowMultiple={allowMultiple}
+							overwritePolicy={overwritePolicy}
+							initialFiles={pendingFiles}
+							onBatchComplete={handleBatchComplete}
+							onBatchCanceled={handleBatchCanceled}
+							title={buttonLabel}
+							hint={dropzoneHint}
+							confirmOverwrite={confirmOverwrite}
+						/>
+					)}
+
+					{stage === 'editing' && choice && uploadedItemIds.length > 0 && (
+						<LibraryItemEditorLauncher
+							siteUrl={siteUrl}
+							libraryServerRelativeUrl={choice.libraryUrl}
+							itemIds={uploadedItemIds}
+							contentTypeId={choice.contentTypeId}
+							renderMode={renderMode}
+							isOpen={renderMode === 'modal'}
+							spfxContext={spfxContext}
+							onDetermined={onLauncherDetermined}
+							onOpen={onLauncherOpen}
+							onSaved={onLauncherSaved}
+							onDismiss={onLauncherDismiss}
+							enableBulkAutoRefresh={enableBulkAutoRefresh}
+							bulkWatchAllItems={bulkWatchAllItems}
+							disableDomNudges={disableDomNudges}
+							sandboxExtra={sandboxExtra}
+							autoHeightBestEffort
+						/>
+					)}
+				</Stack>
+			</Dialog>
+		</Stack>
 	);
 };

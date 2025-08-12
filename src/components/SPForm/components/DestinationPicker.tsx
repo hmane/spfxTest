@@ -1,39 +1,30 @@
-import {
-    ComboBox,
-    DefaultButton,
-    Dropdown,
-    IComboBoxOption,
-    IDropdownOption,
-    Label,
-    MessageBar,
-    MessageBarType,
-    Pivot,
-    PivotItem,
-    PrimaryButton,
-    Stack,
-    Text,
-    TextField,
-} from '@fluentui/react';
 import * as React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
-    ContentTypeInfo,
-    DestinationChoice,
-    LibraryOption,
-    PickerMode,
-    SharePointService,
-    UploadSelectionScope
-} from '../types';
-import { isNonEmptyString, normalizeError, trimLeadingSlash } from '../utils';
+	Stack,
+	Text,
+	Dropdown,
+	IDropdownOption,
+	PrimaryButton,
+	DefaultButton,
+	Pivot,
+	PivotItem,
+	ComboBox,
+	IComboBoxOption,
+	MessageBar,
+	MessageBarType,
+	Label,
+	SelectableOptionMenuItemType,
+} from '@fluentui/react';
+import { ContentTypeInfo, DestinationChoice, LibraryOption, PickerMode } from '../types';
+import { SharePointService } from '../types';
+import { normalizeError } from '../utils';
 
 export interface DestinationPickerProps {
 	pickerMode: PickerMode; // libraryFirst | contentTypeFirst | mixed
-	selectionScope: UploadSelectionScope; // single | multiple (future: could restrict CTs if needed)
 
 	libraries: LibraryOption[]; // configured library allow-list
-	defaultLibrary?: string; // optional default lib (server-relative)
-	showContentTypePicker: boolean; // show/hide CT UI
-	allowFolderSelection: boolean; // show/hide folder field
+	showContentTypePicker: boolean; // can hide CT UI entirely
 
 	globalAllowedContentTypeIds?: string[] | 'all';
 
@@ -46,14 +37,13 @@ export interface DestinationPickerProps {
 	onCancel: () => void;
 
 	// UI
-	primaryText?: string; // e.g., "Continue"
-	cancelText?: string; // e.g., "Cancel"
-	title?: string; // e.g., "Select destination"
-	subText?: string; // optional helper text
+	primaryText?: string;
+	cancelText?: string;
+	title?: string;
+	subText?: string;
 }
 
 type TabKey = 'library' | 'contentType';
-
 interface CTWithLib {
 	ct: ContentTypeInfo;
 	lib: LibraryOption;
@@ -62,36 +52,24 @@ interface CTWithLib {
 export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 	const {
 		pickerMode,
-		selectionScope,
-
 		libraries,
-		defaultLibrary,
 		showContentTypePicker,
-		allowFolderSelection,
-
 		globalAllowedContentTypeIds,
-
 		spService,
-
 		preselectContentTypeId,
-
 		onSubmit,
 		onCancel,
-
 		primaryText = 'Continue',
 		cancelText = 'Cancel',
 		title = 'Choose destination',
 		subText,
 	} = props;
 
-	// ---------- Derived basics ----------
 	const oneLibraryOnly = libraries.length === 1;
-	const initialLibUrl = oneLibraryOnly ? libraries[0].serverRelativeUrl : defaultLibrary || '';
 
 	const [activeTab, setActiveTab] = useState<TabKey>(() => {
 		if (pickerMode === 'libraryFirst') return 'library';
 		if (pickerMode === 'contentTypeFirst') return 'contentType';
-		// mixed: choose based on what’s preselected
 		return preselectContentTypeId ? 'contentType' : 'library';
 	});
 
@@ -100,22 +78,19 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 	const [loading, setLoading] = useState<boolean>(false);
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-	// Selections
-	const [selectedLibraryUrl, setSelectedLibraryUrl] = useState<string>(initialLibUrl);
+	const [selectedLibraryUrl, setSelectedLibraryUrl] = useState<string>(
+		oneLibraryOnly ? libraries[0].serverRelativeUrl : ''
+	);
 	const [selectedCTId, setSelectedCTId] = useState<string | undefined>(preselectContentTypeId);
-	const [folderPath, setFolderPath] = useState<string>('');
 
-	// ---------- Load library titles + CTs lazily ----------
 	useEffect(() => {
 		let disposed = false;
-
 		const load = async () => {
 			try {
 				setLoading(true);
 				setErrorMsg(null);
-
-				// Titles (only for those we’ll show)
 				const titles: Record<string, string> = { ...libTitles };
+
 				for (const lib of libraries) {
 					if (!titles[lib.serverRelativeUrl]) {
 						try {
@@ -128,7 +103,6 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 					}
 				}
 
-				// If we need CTs at all:
 				const wantCTs = showContentTypePicker || pickerMode !== 'libraryFirst';
 				const perLibCTs: Record<string, ContentTypeInfo[]> = { ...ctsByLib };
 
@@ -136,21 +110,17 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 					for (const lib of libraries) {
 						if (!perLibCTs[lib.serverRelativeUrl]) {
 							const raw = await spService.getLibraryContentTypes(lib.serverRelativeUrl);
-							const visible = raw.filter((ct) => !ct.hidden); // already filtered in service, but extra guard
-							// Respect per-library allowed CTs if configured
+							const visible = raw.filter((ct) => !ct.hidden);
 							const filtered =
 								lib.allowedContentTypeIds === 'all' || !lib.allowedContentTypeIds
 									? visible
-									: visible.filter((ct) => lib.allowedContentTypeIds!.includes(ct.id));
-
-							// Respect global allow-list if provided
+									: visible.filter((ct) => (lib.allowedContentTypeIds as string[]).includes(ct.id));
 							const finalList =
 								!globalAllowedContentTypeIds || globalAllowedContentTypeIds === 'all'
 									? filtered
 									: filtered.filter((ct) =>
 											(globalAllowedContentTypeIds as string[]).includes(ct.id)
 									  );
-
 							perLibCTs[lib.serverRelativeUrl] = finalList.sort((a, b) =>
 								a.name.localeCompare(b.name)
 							);
@@ -176,21 +146,18 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [libraries, showContentTypePicker, pickerMode, globalAllowedContentTypeIds]);
 
-	// ---------- Build CT-first search index ----------
+	// Build CT-first index
 	const ctIndex: CTWithLib[] = useMemo(() => {
 		if (!showContentTypePicker && pickerMode === 'libraryFirst') return [];
 		const out: CTWithLib[] = [];
 		for (const lib of libraries) {
 			const cts = ctsByLib[lib.serverRelativeUrl] || [];
-			for (const ct of cts) {
-				out.push({ ct, lib });
-			}
+			for (const ct of cts) out.push({ ct, lib });
 		}
-		// Deduplicate (CT might appear in multiple libs with same id & name; we keep multiple entries but annotate)
 		return out;
 	}, [libraries, ctsByLib, pickerMode, showContentTypePicker]);
 
-	// ---------- Library options ----------
+	// Library options
 	const libraryOptions: IDropdownOption[] = useMemo(() => {
 		return libraries.map((lib) => ({
 			key: lib.serverRelativeUrl,
@@ -202,117 +169,79 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 		}));
 	}, [libraries, libTitles]);
 
-	// ---------- CT options for the chosen library ----------
+	// CT options for selected lib
 	const ctOptionsForSelectedLibrary: IComboBoxOption[] = useMemo(() => {
 		if (!selectedLibraryUrl) return [];
 		const cts = ctsByLib[selectedLibraryUrl] || [];
-		return cts.map((ct) => ({
-			key: ct.id,
-			text: ct.name,
-			data: ct,
-		}));
+		return cts.map((ct) => ({ key: ct.id, text: ct.name, data: ct }));
 	}, [ctsByLib, selectedLibraryUrl]);
 
-	// ---------- CT-first options (cross-library) ----------
-	const allCTOptions: IComboBoxOption[] = useMemo(() => {
-		// Show CT name; if it appears in >1 libraries, append a chip-like suffix
-		const counts: Record<string, number> = {};
-		for (const e of ctIndex) counts[e.ct.id] = (counts[e.ct.id] || 0) + 1;
-
-		// Using first seen as representative for description
-		const byId: Record<string, CTWithLib[]> = {};
-		for (const e of ctIndex) (byId[e.ct.id] ||= []).push(e);
-
-		const opts: IComboBoxOption[] = [];
-		for (const [ctId, entries] of Object.entries(byId)) {
-			const name = entries[0].ct.name;
-			const desc = entries[0].ct.description;
-			const multi = counts[ctId] > 1;
-
-			opts.push({
-				key: ctId,
-				text: multi ? `${name} (${counts[ctId]} locations)` : name,
-				data: { description: desc, entries },
-			});
+	// CT-first options (grouped by library header)
+	const allCTGroupedOptions: IComboBoxOption[] = useMemo(() => {
+		const grouped: IComboBoxOption[] = [];
+		for (const lib of libraries) {
+			const cts = ctsByLib[lib.serverRelativeUrl] || [];
+			if (!cts.length) continue;
+			const header: IComboBoxOption = {
+				key: `hdr_${lib.serverRelativeUrl}`,
+				text: libTitles[lib.serverRelativeUrl] || lib.label || lib.serverRelativeUrl,
+				itemType: SelectableOptionMenuItemType.Header,
+			} as any;
+			grouped.push(header);
+			for (const ct of cts) {
+				grouped.push({
+					key: ct.id,
+					text: ct.name,
+					data: { libUrl: lib.serverRelativeUrl, description: ct.description },
+				});
+			}
 		}
-		return opts.sort((a, b) => a.text.localeCompare(b.text));
-	}, [ctIndex]);
+		return grouped;
+	}, [libraries, ctsByLib, libTitles]);
 
-	// ---------- Validation ----------
+	// Validation
 	const canContinue = useMemo(() => {
 		if (activeTab === 'library') {
 			if (!selectedLibraryUrl) return false;
 			if (showContentTypePicker) {
 				const cts = ctsByLib[selectedLibraryUrl] || [];
-				// If library has exactly one CT, OK without selection
 				if (cts.length === 1) return true;
-				// If multiple, require a CT selection
 				return !!selectedCTId;
 			}
-			// CT picker hidden → we allow without CT
 			return true;
 		} else {
-			// contentType tab
-			if (!selectedCTId) return false;
-			// Resolve to a single library if possible; otherwise require library selection (handled below)
-			const libsForCT = ctIndex
-				.filter((e) => e.ct.id === selectedCTId)
-				.map((e) => e.lib.serverRelativeUrl);
-			if (libsForCT.length === 1) return true;
-			return !!selectedLibraryUrl; // user picked a specific library among the candidates
+			return !!selectedCTId; // library auto-resolves from grouped option data
 		}
-	}, [activeTab, selectedLibraryUrl, selectedCTId, showContentTypePicker, ctsByLib, ctIndex]);
+	}, [activeTab, selectedLibraryUrl, selectedCTId, showContentTypePicker, ctsByLib]);
 
-	// Whenever CT changes in CT-first mode, auto-resolve library if unique
-	useEffect(() => {
-		if (activeTab !== 'contentType' || !selectedCTId) return;
-		const libsForCT = ctIndex
-			.filter((e) => e.ct.id === selectedCTId)
-			.map((e) => e.lib.serverRelativeUrl);
-		if (libsForCT.length === 1) {
-			setSelectedLibraryUrl(libsForCT[0]);
-		} else if (libsForCT.length > 1) {
-			// If current selected library isn't in the filtered set, clear it
-			if (!libsForCT.includes(selectedLibraryUrl)) setSelectedLibraryUrl('');
-		}
-	}, [activeTab, selectedCTId, ctIndex, selectedLibraryUrl]);
-
-	// In library-first, if there's only one CT for the selected library, auto-pick it
+	// Auto-pick only CT for library-first
 	useEffect(() => {
 		if (activeTab !== 'library' || !selectedLibraryUrl || !showContentTypePicker) return;
 		const cts = ctsByLib[selectedLibraryUrl] || [];
 		if (cts.length === 1) setSelectedCTId(cts[0].id);
-		// If multiple, preserve user's explicit choice
 	}, [activeTab, selectedLibraryUrl, showContentTypePicker, ctsByLib]);
 
-	// ---------- Submit ----------
 	const handleContinue = () => {
-		try {
-			const libUrl = selectedLibraryUrl || (oneLibraryOnly ? libraries[0].serverRelativeUrl : '');
-			if (!libUrl) return;
+		let libUrl = selectedLibraryUrl;
+		let ctId: string | undefined = selectedCTId;
 
-			let ctId: string | undefined = selectedCTId;
-			if (activeTab === 'library' && showContentTypePicker) {
-				const cts = ctsByLib[libUrl] || [];
-				if (cts.length === 1) ctId = cts[0].id;
-			}
-
-			const choice: DestinationChoice = {
-				libraryUrl: libUrl,
-				contentTypeId: ctId,
-				folderPath: isNonEmptyString(folderPath) ? trimLeadingSlash(folderPath!) : undefined,
-			};
-
-			onSubmit(choice);
-		} catch (e) {
-			setErrorMsg(normalizeError(e).message);
+		if (activeTab === 'contentType') {
+			// When grouped, selected option stores libUrl in data
+			const opt = allCTGroupedOptions.find((o) => o.key === selectedCTId);
+			const data = opt?.data as any;
+			if (data?.libUrl) libUrl = data.libUrl;
+		} else if (activeTab === 'library' && showContentTypePicker) {
+			const cts = ctsByLib[selectedLibraryUrl] || [];
+			if (cts.length === 1) ctId = cts[0].id;
 		}
+
+		if (!libUrl) return;
+		onSubmit({ libraryUrl: libUrl, contentTypeId: ctId });
 	};
 
-	// ---------- Render helpers ----------
+	// Render helpers
 	const renderLibraryFirst = () => {
 		const showLibraryDropdown = !oneLibraryOnly;
-
 		return (
 			<Stack tokens={{ childrenGap: 12 }}>
 				{showLibraryDropdown ? (
@@ -331,7 +260,6 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 						<Text>{libraryOptions[0]?.text}</Text>
 					</Stack>
 				)}
-
 				{showContentTypePicker && (
 					<>
 						<Label>Content type</Label>
@@ -347,9 +275,11 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 								}
 								options={ctOptionsForSelectedLibrary}
 								selectedKey={selectedCTId}
-								onChange={(_, opt) => setSelectedCTId(opt?.key as string)}
-								onInputValueChange={(value) => {
-									// ignore freeform
+								onChange={(_, opt) => {
+									// ignore group headers
+									// @fluentui types: opt?.itemType === SelectableOptionMenuItemType.Header
+									if ((opt as any)?.itemType === 1 /* Header */) return;
+									setSelectedCTId(opt?.key as string);
 								}}
 							/>
 						) : (
@@ -363,28 +293,13 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 						)}
 					</>
 				)}
-
-				{allowFolderSelection && (
-					<>
-						<Label>Folder (optional)</Label>
-						<TextField
-							placeholder="e.g., Invoices/2025"
-							value={folderPath}
-							onChange={(_, v) => setFolderPath(v || '')}
-						/>
-					</>
-				)}
 			</Stack>
 		);
 	};
 
 	const renderContentTypeFirst = () => {
-		// Determine candidate libraries for selected CT
-		const libsForSelectedCT = selectedCTId
-			? ctIndex.filter((e) => e.ct.id === selectedCTId).map((e) => e.lib)
-			: [];
-
-		const multipleLibs = libsForSelectedCT.length > 1;
+		const selectedOpt = allCTGroupedOptions.find((o) => o.key === selectedCTId);
+		const selectedDesc = (selectedOpt?.data as any)?.description as string | undefined;
 
 		return (
 			<Stack tokens={{ childrenGap: 12 }}>
@@ -394,53 +309,16 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 					autoComplete="on"
 					useComboBoxAsMenuWidth
 					placeholder={
-						allCTOptions.length > 0 ? 'Select a content type' : 'No content types available'
+						allCTGroupedOptions.length > 0 ? 'Select a content type' : 'No content types available'
 					}
-					options={allCTOptions}
+					options={allCTGroupedOptions}
 					selectedKey={selectedCTId}
 					onChange={(_, opt) => setSelectedCTId(opt?.key as string)}
 				/>
-
-				{selectedCTId && (
+				{selectedDesc && (
 					<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
-						{(allCTOptions.find((o) => o.key === selectedCTId)?.data?.description as string) || ''}
+						{selectedDesc}
 					</Text>
-				)}
-
-				{selectedCTId && !multipleLibs && libsForSelectedCT.length === 1 && (
-					<Stack>
-						<Label>Destination</Label>
-						<Text>
-							{libTitles[libsForSelectedCT[0].serverRelativeUrl] ||
-								libsForSelectedCT[0].serverRelativeUrl}
-						</Text>
-					</Stack>
-				)}
-
-				{selectedCTId && multipleLibs && (
-					<>
-						<Label>Choose a location</Label>
-						<Dropdown
-							options={libsForSelectedCT.map((l) => ({
-								key: l.serverRelativeUrl,
-								text: libTitles[l.serverRelativeUrl] || l.serverRelativeUrl,
-							}))}
-							selectedKey={selectedLibraryUrl || undefined}
-							onChange={(_, opt) => setSelectedLibraryUrl((opt?.key as string) || '')}
-							placeholder="Select a destination"
-						/>
-					</>
-				)}
-
-				{allowFolderSelection && (
-					<>
-						<Label>Folder (optional)</Label>
-						<TextField
-							placeholder="e.g., Invoices/2025"
-							value={folderPath}
-							onChange={(_, v) => setFolderPath(v || '')}
-						/>
-					</>
 				)}
 			</Stack>
 		);

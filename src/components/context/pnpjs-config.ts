@@ -109,25 +109,26 @@ function readUrlOverrides(): Partial<
 
 function getBuildMode(): 'production' | 'development' | 'test' | 'unknown' {
 	try {
-		// 1) SPFx explicit environment
-		if (Environment.type === EnvironmentType.Local) return 'development'; // gulp serve
-		if (Environment.type === EnvironmentType.Test) return 'test'; // unit/integration harnesses
+		// 1) Explicit SPFx local test harness
+		if (Environment.type === EnvironmentType.Local) return 'development';
+		if (Environment.type === EnvironmentType.Test) return 'test';
 
-		// 2) Browser hints (hosted but dev-like)
-		const loc = typeof window !== 'undefined' ? window.location : undefined;
-		const path = (loc?.pathname || '').toLowerCase();
-		const host = (loc?.hostname || '').toLowerCase();
+		// 2) Hosted page but loading debug manifests (spfx-fast-serve / local dev)
+		const usp = new URLSearchParams(window.location.search);
+		const hasDebugManifests = usp.has('debugManifestsFile') || usp.get('loadSPFX') === 'true';
+		if (hasDebugManifests) return 'development';
 
-		// Localhost or workbench typically indicates dev
+		// 3) Extra safety: localhost/workbench patterns
+		const host = window.location.hostname.toLowerCase();
+		const path = window.location.pathname.toLowerCase();
 		if (host === 'localhost' || path.includes('/_layouts/15/workbench.aspx')) return 'development';
 
-		// 3) Default: production (bundled, deployed)
+		// 4) Otherwise, assume production bundle on hosted page
 		return 'production';
 	} catch {
 		return 'unknown';
 	}
 }
-
 /**
  * Detect site env by your path rules:
  *  - /debug{SITE_NAME} → dev

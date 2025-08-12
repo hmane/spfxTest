@@ -1,81 +1,91 @@
-import { Version } from '@microsoft/sp-core-library';
-import {
-	BaseClientSideWebPart,
-	IPropertyPaneConfiguration,
-	PropertyPaneDropdown,
-	PropertyPaneTextField,
-	PropertyPaneToggle,
-} from '@microsoft/sp-webpart-base';
 import * as React from 'react';
 import * as ReactDom from 'react-dom';
+import { Version } from '@microsoft/sp-core-library';
+import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
 
+// ✅ Modern property pane (avoids deprecated APIs)
+import {
+	IPropertyPaneConfiguration,
+	PropertyPaneDropdown,
+	PropertyPaneToggle,
+	PropertyPaneTextField,
+} from '@microsoft/sp-property-pane';
+
+// PnP property controls
 import {
 	PropertyFieldListPicker,
 	PropertyFieldListPickerOrderBy,
 } from '@pnp/spfx-property-controls/lib/PropertyFieldListPicker';
-
 import {
+	PropertyFieldCollectionData,
 	CustomCollectionFieldType,
 	IPropertyFieldCollectionDataProps,
-	PropertyFieldCollectionData,
 } from '@pnp/spfx-property-controls/lib/PropertyFieldCollectionData';
 
+import { ToastHost } from './components/ToastHost';
 import { UploadAndEditApp } from './components/UploadAndEditApp';
 import { LibraryOption, UploadAndEditWebPartProps } from './types';
-import { ToastHost } from './components/ToastHost';
 
-/** Web part props shape (persisted) */
 export interface IUploadAndEditWebPartProps extends UploadAndEditWebPartProps {
-	// the raw list picker selection (array of list IDs/urls depending on mode)
 	librariesPicker?: any[];
-	// the per-library extras (from CollectionData)
 	librariesExtras?: Array<{
 		serverRelativeUrl: string;
 		label?: string;
 		defaultFolder?: string;
 		minimalViewId?: string;
-		allowedContentTypeIds?: string; // comma-separated CT IDs or 'all'
+		allowedContentTypeIds?: string; // 'all' or comma-separated
 	}>;
 }
 
 export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadAndEditWebPartProps> {
 	public render(): void {
-		const libraries: LibraryOption[] = this._composeLibraries();
+		const libraries = this._composeLibraries();
+		const configured = libraries.length > 0;
 
-		const element = React.createElement(
-			ToastHost,
-			null,
-			React.createElement(UploadAndEditApp, {
-				// context + site
-				siteUrl: this.context.pageContext.web.absoluteUrl,
-				spfxContext: this.context,
+		const element: React.ReactElement = configured
+			? React.createElement(
+					ToastHost,
+					null,
+					React.createElement(UploadAndEditApp, {
+						siteUrl: this.context.pageContext.web.absoluteUrl,
+						spfxContext: this.context,
 
-				// config
-				pickerMode: this.properties.pickerMode ?? 'mixed',
-				renderMode: this.properties.renderMode ?? 'modal',
-				selectionScope: this.properties.selectionScope ?? 'multiple',
-				allowFolderSelection: this.properties.allowFolderSelection ?? true,
-				showContentTypePicker: this.properties.showContentTypePicker ?? true,
-				overwritePolicy: this.properties.overwritePolicy ?? 'suffix',
+						pickerMode: this.properties.pickerMode ?? 'mixed',
+						renderMode: this.properties.renderMode ?? 'modal',
+						selectionScope: this.properties.selectionScope ?? 'multiple',
+						showContentTypePicker: this.properties.showContentTypePicker ?? true,
 
-				libraries,
-				defaultLibrary: this.properties.defaultLibrary,
-				globalAllowedContentTypeIds: this.properties.globalAllowedContentTypeIds,
+						libraries,
+						globalAllowedContentTypeIds: this.properties.globalAllowedContentTypeIds,
 
-				enableBulkAutoRefresh: this.properties.enableBulkAutoRefresh ?? true,
-				bulkWatchAllItems: this.properties.bulkWatchAllItems ?? true,
+						overwritePolicy: this.properties.overwritePolicy ?? 'suffix',
 
-				buttonLabel: this.properties.buttonLabel ?? 'Upload files',
-				dropzoneHint:
-					this.properties.dropzoneHint ?? 'Drag & drop files here, or click Select files',
-				successToast: this.properties.successToast,
+						enableBulkAutoRefresh: this.properties.enableBulkAutoRefresh ?? true,
+						bulkWatchAllItems: this.properties.bulkWatchAllItems ?? true,
 
-				disableDomNudges: this.properties.disableDomNudges ?? false,
-				sandboxExtra: this.properties.sandboxExtra,
+						buttonLabel:
+							this.properties.buttonLabel ??
+							(this.properties.selectionScope === 'single' ? 'Upload file' : 'Upload files'),
+						dropzoneHint:
+							this.properties.dropzoneHint ??
+							(this.properties.selectionScope === 'single'
+								? 'Drop a file here'
+								: 'Drop files here'),
+						successToast: this.properties.successToast,
 
-				minimalViewId: undefined, // prefer per-library minimalViewId
-			})
-		);
+						disableDomNudges: this.properties.disableDomNudges ?? false,
+						sandboxExtra: this.properties.sandboxExtra,
+
+						showLoading: undefined,
+						hideLoading: undefined,
+						confirmOverwrite: undefined,
+					})
+			  )
+			: React.createElement(
+					'div',
+					{ style: { padding: 12 } },
+					'Configure this web part in the property pane.'
+			  );
 
 		ReactDom.render(element, this.domElement);
 	}
@@ -87,8 +97,6 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 	protected get dataVersion(): Version {
 		return Version.parse('1.0');
 	}
-
-	// --------- Property pane ---------
 
 	protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
 		return {
@@ -125,12 +133,6 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 									],
 									selectedKey: this.properties.selectionScope ?? 'multiple',
 								}),
-								PropertyPaneToggle('allowFolderSelection', {
-									label: 'Allow choosing a folder',
-									onText: 'Yes',
-									offText: 'No',
-									checked: this.properties.allowFolderSelection ?? true,
-								}),
 								PropertyPaneToggle('showContentTypePicker', {
 									label: 'Show content type picker',
 									onText: 'Yes',
@@ -151,7 +153,6 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 						{
 							groupName: 'Allowed libraries',
 							groupFields: [
-								// 1) Pick the document libraries (BaseTemplate 101)
 								PropertyFieldListPicker('librariesPicker', {
 									label: 'Choose one or more document libraries',
 									selectedList: (this.properties.librariesPicker as any) || [],
@@ -166,7 +167,6 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 									key: 'librariesPicker',
 								}) as any,
 
-								// 2) Optional: per-library metadata / overrides
 								PropertyFieldCollectionData('librariesExtras', {
 									key: 'librariesExtras',
 									label: 'Per-library options (optional)',
@@ -197,16 +197,11 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 										},
 										{
 											id: 'allowedContentTypeIds',
-											title: 'Allowed CT IDs (comma or "all")',
+											title: 'Allowed CT IDs ("all" or comma-separated)',
 											type: CustomCollectionFieldType.string,
 										},
 									],
 								} as IPropertyFieldCollectionDataProps),
-								PropertyPaneTextField('defaultLibrary', {
-									label: 'Default library (server-relative URL)',
-									description: 'Optional. If only one library is configured, this is ignored.',
-									value: this.properties.defaultLibrary,
-								}),
 							],
 						},
 						{
@@ -242,15 +237,20 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 							groupFields: [
 								PropertyPaneTextField('buttonLabel', {
 									label: 'Upload button title',
-									value: this.properties.buttonLabel ?? 'Upload files',
+									value:
+										this.properties.buttonLabel ??
+										(this.properties.selectionScope === 'single' ? 'Upload file' : 'Upload files'),
 								}),
 								PropertyPaneTextField('dropzoneHint', {
 									label: 'Dropzone hint',
 									value:
-										this.properties.dropzoneHint ?? 'Drag & drop files here, or click Select files',
+										this.properties.dropzoneHint ??
+										(this.properties.selectionScope === 'single'
+											? 'Drop a file here'
+											: 'Drop files here'),
 								}),
 								PropertyPaneTextField('successToast', {
-									label: 'Success message (optional)',
+									label: 'Success toast after saving properties',
 									value: this.properties.successToast,
 								}),
 							],
@@ -261,12 +261,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 		};
 	}
 
-	// ---------- Helpers ----------
-
-	/**
-	 * Merge the list-picker selection with the per-library extras
-	 * to produce the final LibraryOption[] used by the app.
-	 */
+	/** Merge list picker selection with extras => LibraryOption[] */
 	private _composeLibraries(): LibraryOption[] {
 		const picked = (this.properties.librariesPicker || []) as Array<any>;
 		const extras = (this.properties.librariesExtras || []).reduce((acc, r) => {
@@ -274,16 +269,8 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 			return acc;
 		}, {} as Record<string, any>);
 
-		// PropertyFieldListPicker returns items with .Id and .Title and .Url (web-relative)
-		// We want server-relative library URLs. In SPFx, list root folder ServerRelativeUrl
-		// isn’t provided by the picker directly, so we’ll accept either server-relative paths
-		// from `librariesExtras` OR fall back to the picker’s `Url` (often web-relative).
-		// In runtime, DestinationPicker resolves titles again from SharePoint.
 		const libs: LibraryOption[] = picked.map((p: any) => {
-			// Try extras first (authoritative for URL)
 			const ex = extras[p?.Url] || extras[p?.ServerRelativeUrl] || extras[p?.Title] || undefined;
-
-			// Best-effort server-relative: if picker gives '/sites/...', use that; else assume it’s server-relative already
 			const serverRelativeUrl =
 				ex?.serverRelativeUrl ||
 				(p?.Url?.startsWith('/') ? p.Url : p?.ServerRelativeUrl) ||
@@ -307,13 +294,12 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 			} as LibraryOption;
 		});
 
-		// Deduplicate by serverRelativeUrl
+		// dedupe
 		const byUrl = new Map<string, LibraryOption>();
 		for (const l of libs) {
 			if (!l.serverRelativeUrl) continue;
 			if (!byUrl.has(l.serverRelativeUrl)) byUrl.set(l.serverRelativeUrl, l);
 			else {
-				// merge extras if needed (first pick wins; add missing props)
 				const cur = byUrl.get(l.serverRelativeUrl)!;
 				byUrl.set(l.serverRelativeUrl, {
 					...cur,
