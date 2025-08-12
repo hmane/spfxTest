@@ -3,7 +3,7 @@ import * as ReactDom from 'react-dom';
 import { Version } from '@microsoft/sp-core-library';
 import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
 
-// ✅ Modern property pane (avoids deprecated APIs)
+// Modern property pane (avoid deprecated symbols)
 import {
 	IPropertyPaneConfiguration,
 	PropertyPaneDropdown,
@@ -11,7 +11,7 @@ import {
 	PropertyPaneTextField,
 } from '@microsoft/sp-property-pane';
 
-// PnP property controls
+// PnP SPFx property controls
 import {
 	PropertyFieldListPicker,
 	PropertyFieldListPickerOrderBy,
@@ -22,12 +22,21 @@ import {
 	IPropertyFieldCollectionDataProps,
 } from '@pnp/spfx-property-controls/lib/PropertyFieldCollectionData';
 
+// PnPjs to resolve list GUIDs → serverRelativeUrl
+import { spfi, SPFI } from '@pnp/sp';
+import { SPFx as PnP_SPFX } from '@pnp/sp';
+import '@pnp/sp/webs';
+import '@pnp/sp/lists';
+import '@pnp/sp/folders'; // for RootFolder expansion
+
 import { ToastHost } from './components/ToastHost';
 import { UploadAndEditApp } from './components/UploadAndEditApp';
 import { LibraryOption, UploadAndEditWebPartProps } from './types';
 
 export interface IUploadAndEditWebPartProps extends UploadAndEditWebPartProps {
-	librariesPicker?: any[];
+	/** List GUIDs from ListPicker (multi-select) */
+	librariesPicker?: string[];
+	/** Per-library extra config entered in the CollectionData grid */
 	librariesExtras?: Array<{
 		serverRelativeUrl: string;
 		label?: string;
@@ -38,9 +47,18 @@ export interface IUploadAndEditWebPartProps extends UploadAndEditWebPartProps {
 }
 
 export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadAndEditWebPartProps> {
+	private _sp!: SPFI;
+	private _resolvedLibraries: LibraryOption[] = [];
+	private _resolving = false;
+
+	public async onInit(): Promise<void> {
+		await super.onInit();
+		this._sp = spfi().using(PnP_SPFX(this.context));
+		await this._refreshLibraries(); // resolve on load
+	}
+
 	public render(): void {
-		const libraries = this._composeLibraries();
-		const configured = libraries.length > 0;
+		const configured = this._resolvedLibraries.length > 0;
 
 		const element: React.ReactElement = configured
 			? React.createElement(
@@ -55,7 +73,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 						selectionScope: this.properties.selectionScope ?? 'multiple',
 						showContentTypePicker: this.properties.showContentTypePicker ?? true,
 
-						libraries,
+						libraries: this._resolvedLibraries,
 						globalAllowedContentTypeIds: this.properties.globalAllowedContentTypeIds,
 
 						overwritePolicy: this.properties.overwritePolicy ?? 'suffix',
@@ -76,6 +94,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 						disableDomNudges: this.properties.disableDomNudges ?? false,
 						sandboxExtra: this.properties.sandboxExtra,
 
+						// hook these if you have global loader / confirm dialog utils
 						showLoading: undefined,
 						hideLoading: undefined,
 						confirmOverwrite: undefined,
@@ -83,8 +102,8 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 			  )
 			: React.createElement(
 					'div',
-					{ style: { padding: 12 } },
-					'Configure this web part in the property pane.'
+					{ style: { padding: 12, opacity: this._resolving ? 0.6 : 1 } },
+					this._resolving ? 'Resolving libraries…' : 'Configure this web part in the property pane.'
 			  );
 
 		ReactDom.render(element, this.domElement);
@@ -97,6 +116,8 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 	protected get dataVersion(): Version {
 		return Version.parse('1.0');
 	}
+
+	// ---------------- Property Pane ----------------
 
 	protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
 		return {
@@ -157,7 +178,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 									label: 'Choose one or more document libraries',
 									selectedList: (this.properties.librariesPicker as any) || [],
 									includeHidden: false,
-									baseTemplate: 101,
+									baseTemplate: 101, // Document Library
 									orderBy: PropertyFieldListPickerOrderBy.Title,
 									multiSelect: true,
 									onPropertyChange: this.onPropertyPaneFieldChanged,
@@ -166,7 +187,6 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 									deferredValidationTime: 200,
 									key: 'librariesPicker',
 								}) as any,
-
 								PropertyFieldCollectionData('librariesExtras', {
 									key: 'librariesExtras',
 									label: 'Per-library options (optional)',
@@ -261,82 +281,93 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 		};
 	}
 
-	private async resolvePickedLibraries(): Promise<any[]> {
-		if (!this.properties.librariesPicker || this.properties.librariesPicker.length === 0) {
-			return [];
+	/**
+	 * When property pane changes, re-resolve libraries if needed.
+	 */
+	protected onPropertyPaneFieldChanged(propertyPath: string, oldValue: any, newValue: any): void {
+		super.onPropertyPaneFieldChanged(propertyPath, oldValue, newValue);
+
+		if (propertyPath === 'librariesPicker' || propertyPath === 'librariesExtras') {
+			// Kick off re-resolution; re-render when done
+			this._refreshLibraries().then(() => this.render());
 		}
-
-		const sp = spfi().using(SPFx(this.context));
-
-		// librariesPicker is array of GUIDs as strings
-		const resolved = await Promise.all(
-			(this.properties.librariesPicker as string[]).map(async (listId) => {
-				try {
-					const list = await sp.web.lists.getById(listId)();
-					return {
-						id: list.Id, // GUID
-						title: list.Title,
-						serverRelativeUrl: list.RootFolder.ServerRelativeUrl,
-					};
-				} catch (err) {
-					console.error(`Error fetching library info for ${listId}`, err);
-					return null;
-				}
-			})
-		);
-
-		return resolved.filter(Boolean);
 	}
 
-	/** Merge list picker selection with extras => LibraryOption[] */
-	private _composeLibraries(): LibraryOption[] {
-		const picked = (this.properties.librariesPicker || []) as Array<any>;
-		const extras = (this.properties.librariesExtras || []).reduce((acc, r) => {
-			acc[r.serverRelativeUrl] = r;
-			return acc;
-		}, {} as Record<string, any>);
+	// ---------------- Resolution helpers ----------------
 
-		const libs: LibraryOption[] = picked.map((p: any) => {
-			const ex = extras[p?.Url] || extras[p?.ServerRelativeUrl] || extras[p?.Title] || undefined;
-			const serverRelativeUrl =
-				ex?.serverRelativeUrl ||
-				(p?.Url?.startsWith('/') ? p.Url : p?.ServerRelativeUrl) ||
-				p?.Url ||
-				'';
+	/**
+	 * Resolve GUIDs from ListPicker to LibraryOption[] with serverRelativeUrl,
+	 * then merge with per-library extras.
+	 */
+	private async _refreshLibraries(): Promise<void> {
+		this._resolving = true;
+		try {
+			const ids: string[] = Array.isArray(this.properties.librariesPicker)
+				? (this.properties.librariesPicker as string[])
+				: this.properties.librariesPicker
+				? [this.properties.librariesPicker as unknown as string]
+				: [];
 
-			const allowedContentTypeIds =
-				!ex?.allowedContentTypeIds || ex.allowedContentTypeIds.trim().toLowerCase() === 'all'
-					? 'all'
-					: ex.allowedContentTypeIds
-							.split(',')
-							.map((s: string) => s.trim())
-							.filter(Boolean);
-
-			return {
-				serverRelativeUrl,
-				label: ex?.label || p?.Title,
-				defaultFolder: ex?.defaultFolder,
-				minimalViewId: ex?.minimalViewId,
-				allowedContentTypeIds,
-			} as LibraryOption;
-		});
-
-		// dedupe
-		const byUrl = new Map<string, LibraryOption>();
-		for (const l of libs) {
-			if (!l.serverRelativeUrl) continue;
-			if (!byUrl.has(l.serverRelativeUrl)) byUrl.set(l.serverRelativeUrl, l);
-			else {
-				const cur = byUrl.get(l.serverRelativeUrl)!;
-				byUrl.set(l.serverRelativeUrl, {
-					...cur,
-					label: cur.label || l.label,
-					defaultFolder: cur.defaultFolder || l.defaultFolder,
-					minimalViewId: cur.minimalViewId || l.minimalViewId,
-					allowedContentTypeIds: cur.allowedContentTypeIds ?? l.allowedContentTypeIds,
-				});
+			if (!ids.length) {
+				this._resolvedLibraries = [];
+				return;
 			}
+
+			// Resolve each list: Id, Title, RootFolder.ServerRelativeUrl
+			const resolved = await Promise.all(
+				ids.map(async (id) => {
+					try {
+						const list: any = await this._sp.web.lists
+							.getById(id)
+							.select('Id', 'Title', 'RootFolder/ServerRelativeUrl')
+							.expand('RootFolder')();
+
+						return {
+							id: list.Id as string,
+							title: list.Title as string,
+							serverRelativeUrl: list?.RootFolder?.ServerRelativeUrl as string,
+						};
+					} catch (e) {
+						// swallow this one but log for admins
+						// eslint-disable-next-line no-console
+						console.warn('Failed to resolve library', id, e);
+						return null;
+					}
+				})
+			);
+
+			const libsResolved = resolved.filter(Boolean) as Array<{
+				id: string;
+				title: string;
+				serverRelativeUrl: string;
+			}>;
+
+			// Merge with extras
+			const extrasArr = this.properties.librariesExtras || [];
+			const extrasMap = new Map<string, any>();
+			for (const ex of extrasArr) extrasMap.set(ex.serverRelativeUrl, ex);
+
+			this._resolvedLibraries = libsResolved.map((r) => {
+				const ex = extrasMap.get(r.serverRelativeUrl);
+				const allowed =
+					!ex?.allowedContentTypeIds || ex.allowedContentTypeIds.trim().toLowerCase() === 'all'
+						? 'all'
+						: ex.allowedContentTypeIds
+								.split(',')
+								.map((s: string) => s.trim())
+								.filter(Boolean);
+
+				const opt: LibraryOption = {
+					serverRelativeUrl: r.serverRelativeUrl,
+					label: ex?.label || r.title,
+					defaultFolder: ex?.defaultFolder,
+					minimalViewId: ex?.minimalViewId,
+					allowedContentTypeIds: allowed,
+				};
+				return opt;
+			});
+		} finally {
+			this._resolving = false;
 		}
-		return Array.from(byUrl.values());
 	}
 }
