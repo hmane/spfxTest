@@ -17,7 +17,6 @@ import { Caching, CachingPessimisticRefresh } from '@pnp/queryable';
 import type { WebPartContext } from '@microsoft/sp-webpart-base';
 import type { BaseComponentContext } from '@microsoft/sp-component-base';
 import type { PageContext } from '@microsoft/sp-page-context';
-
 import {
 	AppInsightsSink,
 	bridgePnPLoggerToSinks,
@@ -31,6 +30,7 @@ import { HttpGateway } from '../net/http';
 import { buildLinks } from '../utils/links';
 import { assert } from '../utils/assert';
 import type { CacheTTL, ContextOptions, EnvName, SPContext } from '../utils/types';
+import { Environment, EnvironmentType } from '@microsoft/sp-core-library';
 
 // ---------- constants ----------
 const TTL_SHORT_MS = 5 * 60 * 1000; // 5 minutes
@@ -107,11 +107,25 @@ function readUrlOverrides(): Partial<
 	}
 }
 
-/** Build mode from bundler */
 function getBuildMode(): 'production' | 'development' | 'test' | 'unknown' {
-	const v = (process?.env?.NODE_ENV as string | undefined) || '';
-	if (v === 'production' || v === 'development' || v === 'test') return v;
-	return 'unknown';
+	try {
+		// 1) SPFx explicit environment
+		if (Environment.type === EnvironmentType.Local) return 'development'; // gulp serve
+		if (Environment.type === EnvironmentType.Test) return 'test'; // unit/integration harnesses
+
+		// 2) Browser hints (hosted but dev-like)
+		const loc = typeof window !== 'undefined' ? window.location : undefined;
+		const path = (loc?.pathname || '').toLowerCase();
+		const host = (loc?.hostname || '').toLowerCase();
+
+		// Localhost or workbench typically indicates dev
+		if (host === 'localhost' || path.includes('/_layouts/15/workbench.aspx')) return 'development';
+
+		// 3) Default: production (bundled, deployed)
+		return 'production';
+	} catch {
+		return 'unknown';
+	}
 }
 
 /**
