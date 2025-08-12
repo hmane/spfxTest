@@ -261,6 +261,33 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 		};
 	}
 
+	private async resolvePickedLibraries(): Promise<any[]> {
+		if (!this.properties.librariesPicker || this.properties.librariesPicker.length === 0) {
+			return [];
+		}
+
+		const sp = spfi().using(SPFx(this.context));
+
+		// librariesPicker is array of GUIDs as strings
+		const resolved = await Promise.all(
+			(this.properties.librariesPicker as string[]).map(async (listId) => {
+				try {
+					const list = await sp.web.lists.getById(listId)();
+					return {
+						id: list.Id, // GUID
+						title: list.Title,
+						serverRelativeUrl: list.RootFolder.ServerRelativeUrl,
+					};
+				} catch (err) {
+					console.error(`Error fetching library info for ${listId}`, err);
+					return null;
+				}
+			})
+		);
+
+		return resolved.filter(Boolean);
+	}
+
 	/** Merge list picker selection with extras => LibraryOption[] */
 	private _composeLibraries(): LibraryOption[] {
 		const picked = (this.properties.librariesPicker || []) as Array<any>;
