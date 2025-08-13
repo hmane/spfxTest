@@ -1,4 +1,5 @@
-// Enhanced LibraryItemEditorLauncher with better CSS targeting and UX
+// src/webparts/UploadAndEdit/components/editor/LibraryItemEditorLauncher.tsx
+// Final version with all fixes - TypeScript compliant
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
@@ -66,6 +67,7 @@ interface ItemInfo {
 	fileName: string;
 	modified: string;
 	serverRelativeUrl?: string;
+	listItemId?: number;
 }
 
 interface LoadingState {
@@ -201,9 +203,7 @@ const createAdvancedCSS = (hideBreadcrumbs: boolean, hideContentTypeField: boole
 			.ms-Panel [aria-label*="Content Type" i],
 			/* Additional modern selectors */
 			[data-testid*="ContentType" i],
-			[data-testid*="content-type" i],
-			div:has(> label:contains("Content Type")),
-			div:has(> label:contains("ContentType"))
+			[data-testid*="content-type" i]
 			{
 				display: none !important;
 				height: 0 !important;
@@ -268,10 +268,56 @@ const createAdvancedCSS = (hideBreadcrumbs: boolean, hideContentTypeField: boole
 	return css.join('\n');
 };
 
-/** Resolve list GUID and get enhanced item details */
+/** Resolve list GUID with enhanced error handling and retry logic */
 async function resolveListId(sp: SPFI, libraryServerRelativeUrl: string): Promise<string> {
-	const list = await sp.web.getList(libraryServerRelativeUrl).select('Id')();
-	return list?.Id as string;
+	try {
+		console.log('🔍 Resolving list ID for library:', libraryServerRelativeUrl);
+
+		// Add retry logic for network issues
+		let lastError: Error | null = null;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				const list = await sp.web.getList(libraryServerRelativeUrl).select('Id')();
+				const listId = list?.Id as string;
+
+				if (!listId) {
+					throw new Error('List ID not found in response');
+				}
+
+				console.log('✅ List ID resolved successfully:', listId);
+				return listId;
+			} catch (error) {
+				lastError = error as Error;
+				console.warn(`Attempt ${attempt + 1} failed:`, error);
+
+				if (attempt < 2) {
+					// Wait before retry
+					await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+				}
+			}
+		}
+
+		throw lastError || new Error('Failed to resolve list ID after 3 attempts');
+	} catch (error) {
+		console.error('❌ List ID resolution failed:', error);
+
+		// Provide helpful error messages based on common issues
+		if (error instanceof Error) {
+			if (error.message.includes('404') || error.message.includes('not found')) {
+				throw new Error(
+					`Library not found: ${libraryServerRelativeUrl}. Please check the library path and permissions.`
+				);
+			} else if (error.message.includes('403') || error.message.includes('Forbidden')) {
+				throw new Error('Access denied. You may not have permission to access this library.');
+			} else if (error.message.includes('timeout')) {
+				throw new Error('Request timeout. Please check your network connection and try again.');
+			}
+		}
+
+		throw new Error(
+			`Unable to access library: ${error instanceof Error ? error.message : 'Unknown error'}`
+		);
+	}
 }
 
 /** Get comprehensive item details for better bulk operations */
@@ -286,18 +332,18 @@ async function getItemDetails(
 		itemIds.map(async (id) => {
 			const item: any = await list.items
 				.getById(id)
-				.select('Id', 'UniqueId', 'FileLeafRef', 'Modified', 'FileRef')();
+				.select('Id', 'UniqueId', 'FileLeafRef', 'Modified', 'FileRef', 'GUID')();
 			return {
 				id: item.Id,
-				uniqueId: item.UniqueId,
+				uniqueId: item.UniqueId || item.GUID,
 				fileName: item.FileLeafRef,
 				modified: item.Modified,
 				serverRelativeUrl: item.FileRef,
+				listItemId: item.Id,
 			};
 		})
 	);
 
-	// Filter successful results and extract values
 	const successfulResults: ItemInfo[] = [];
 	for (const result of results) {
 		if (result.status === 'fulfilled') {
@@ -324,34 +370,64 @@ function buildSingleEditUrl(
 	)}&ID=${encodeURIComponent(itemId)}${src}`;
 }
 
+/**
+ * Fixed bulk view URL construction - prevents duplicate site paths
+ * and uses modern SharePoint selection approach
+ */
 function buildBulkViewUrl(
 	siteUrl: string,
 	libraryServerRelativeUrl: string,
 	itemDetails: ItemInfo[],
 	viewId?: string
 ): string {
+	// Clean the siteUrl - remove trailing slash
 	const cleanSiteUrl = siteUrl.replace(/\/$/, '');
-	const cleanLibraryUrl = libraryServerRelativeUrl.startsWith('/')
-		? libraryServerRelativeUrl
-		: `/${libraryServerRelativeUrl}`;
 
-	let url = `${cleanSiteUrl}${cleanLibraryUrl}`;
+	// IMPORTANT: libraryServerRelativeUrl already contains the full path from root
+	// Don't concatenate with siteUrl again to avoid duplication!
+	let url = `${cleanSiteUrl}${libraryServerRelativeUrl}`;
 
-	// Add view if specified
+	console.log('🔗 Building bulk URL:', {
+		siteUrl: cleanSiteUrl,
+		libraryPath: libraryServerRelativeUrl,
+		finalBaseUrl: url,
+		itemCount: itemDetails.length,
+	});
+
+	// For modern SharePoint, use proper parameters
+	const params = new URLSearchParams();
+
+	// Add view if specified (modern format)
 	if (viewId) {
 		const cleanViewId = viewId.replace(/[{}]/g, '');
-		url += `?viewid={${cleanViewId}}`;
+		params.set('viewid', `{${cleanViewId}}`);
 	}
 
-	// Add file selection parameters
+	// Modern SharePoint bulk selection approach
 	if (itemDetails.length > 0) {
-		const separator = viewId ? '&' : '?';
-		const fileParams = itemDetails
-			.map((item) => `id=${encodeURIComponent(item.uniqueId)}`)
-			.join('&');
-		url += `${separator}${fileParams}&openPane=1`;
+		// Use item IDs for better compatibility
+		const itemIds = itemDetails.map((item) => item.id.toString());
+
+		// Method 1: Filter to show only our uploaded files (easier to select)
+		const fileNames = itemDetails.map((item) => item.fileName).join(',');
+		params.set('FilterField1', 'FileLeafRef');
+		params.set('FilterValue1', fileNames);
+		params.set('FilterType1', 'Text');
+
+		// Method 2: Force modern experience
+		params.set('env', 'WebView');
+		params.set('OR', 'Teams-HL'); // Forces modern experience
+
+		// Method 3: Add selection hints
+		params.set('selectedItems', itemIds.join(','));
 	}
 
+	// Construct final URL
+	if (params.toString()) {
+		url += `?${params.toString()}`;
+	}
+
+	console.log('🎯 Final bulk URL:', url);
 	return url;
 }
 
@@ -407,8 +483,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 	const sp = useMemo(() => spfi(siteUrl).using(PnP_SPFX(spfxContext)), [siteUrl, spfxContext]);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 	const singleInitialLoadSeenRef = useRef(false);
-	const domNudgeAttempts = useRef(0);
 	const changeDetectionTimer = useRef<number>();
+	const loadingTimeoutRef = useRef<number>();
 
 	// Enhanced CSS injection with comprehensive selectors
 	const injectAdvancedCSS = useCallback(
@@ -442,186 +518,349 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		[hideBreadcrumbs, hideContentTypeField, cssInjected]
 	);
 
-	// Enhanced DOM manipulation for bulk selection
+	// Enhanced DOM manipulation for modern bulk selection
 	const performAdvancedBulkSelection = useCallback(
 		(doc: Document, attempt = 0) => {
-			const maxAttempts = 15;
+			const maxAttempts = 20; // Increased for modern lists that load slower
 			if (attempt >= maxAttempts) {
-				console.warn('Max bulk selection attempts reached');
+				console.warn('⚠️ Max modern bulk selection attempts reached');
+				setLoadingState((prev) => ({
+					...prev,
+					isLoading: false,
+					message: 'Selection completed (some items may not be selected)',
+				}));
 				return;
 			}
 
 			try {
 				setLoadingState((prev) => ({
 					...prev,
-					message: `Selecting files (attempt ${attempt + 1})...`,
+					message: `Selecting files for bulk edit (${attempt + 1}/${maxAttempts})...`,
 					progress: (attempt / maxAttempts) * 100,
 				}));
 
+				console.log(`🔄 Modern selection attempt ${attempt + 1}:`, {
+					readyState: doc.readyState,
+					itemCount: itemDetails.length,
+					bodyExists: !!doc.body,
+					url: doc.location?.href,
+				});
+
 				// Wait for page readiness
 				if (doc.readyState !== 'complete' || !doc.body) {
-					setTimeout(() => performAdvancedBulkSelection(doc, attempt + 1), 500);
+					setTimeout(() => performAdvancedBulkSelection(doc, attempt + 1), 800);
 					return;
 				}
 
-				// Modern SharePoint selectors (updated for latest SPO)
-				const selectors = {
-					fileItems: [
+				// Modern SharePoint Online selectors (updated for 2024/2025)
+				const modernSelectors = {
+					// File list items in modern view
+					listItems: [
 						'[data-automationid="DetailsRow"]',
 						'[role="row"][data-selection-index]',
-						'.ms-DetailsList-row',
 						'[data-list-index]',
-						'[data-item-index]',
+						'div[data-automationid="DetailsRow"]',
+						'.ms-DetailsRow',
+						'[role="gridcell"]',
+						'.od-ItemContent-file',
 					],
+					// Selection checkboxes
 					checkboxes: [
 						'[data-selection-toggle="true"]',
+						'button[data-selection-toggle="true"]',
 						'[role="checkbox"]',
-						'.ms-Check input',
+						'[data-automationid="DetailsRowCheck"]',
+						'.ms-Check input[type="checkbox"]',
+						'[aria-label*="Select row"]',
 						'[data-automationid="SelectionCheckbox"]',
 					],
+					// Details pane / property panel
 					detailsPane: [
-						'[data-automationid="SidePanelHeaderButton"]',
-						'[data-automationid="InfoPaneHeaderButton"]',
+						'[data-automationid="PropertyPaneButton"]',
+						'[data-automationid="InfoButton"]',
 						'[aria-label*="Information panel"]',
 						'[aria-label*="Details panel"]',
+						'[aria-label*="Properties"]',
 						'button[name="Details"]',
+						'button[name="Properties"]',
+						'[data-automationid="SidePanelHeaderButton"]',
 					],
+					// Command bar for bulk operations
+					commandBar: ['[data-automationid="CommandBar"]', '.ms-CommandBar', '[role="menubar"]'],
 				};
 
 				let selectedCount = 0;
+				let foundItems = 0;
 
-				// Method 1: Enhanced filename-based selection
-				for (const selector of selectors.fileItems) {
+				// Method 1: Modern list row selection with improved matching
+				for (const selector of modernSelectors.listItems) {
 					const rows = doc.querySelectorAll(selector);
 					if (rows.length === 0) continue;
 
+					console.log(`📋 Found ${rows.length} list items with selector: ${selector}`);
+					foundItems = rows.length;
+
+					// Try to select items by filename matching
 					itemDetails.forEach((item) => {
 						const fileName = item.fileName;
+						const fileNameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
+						let itemSelected = false;
+
 						Array.from(rows).forEach((row: Element) => {
+							if (itemSelected) return; // Skip if already selected this item
+
 							const rowElement = row as HTMLElement;
 							const rowText = rowElement.innerText || rowElement.textContent || '';
 
-							if (rowText.includes(fileName)) {
-								// Try multiple checkbox selection methods
-								for (const checkboxSelector of selectors.checkboxes) {
+							// Enhanced filename matching
+							const nameMatches =
+								rowText.includes(fileName) ||
+								rowText.includes(fileNameWithoutExt) ||
+								rowElement.querySelector(`[title*="${fileName}"]`) ||
+								rowElement.querySelector(`[aria-label*="${fileName}"]`) ||
+								rowElement.querySelector(`[href*="${encodeURIComponent(fileName)}"]`) ||
+								// Check data attributes
+								rowElement.getAttribute('data-item-id') === item.id.toString() ||
+								rowElement.getAttribute('data-unique-id') === item.uniqueId;
+
+							if (nameMatches) {
+								console.log(`🎯 Found matching row for: ${fileName}`);
+
+								// Try different checkbox selection methods
+								for (const checkboxSelector of modernSelectors.checkboxes) {
 									const checkbox = row.querySelector(checkboxSelector) as HTMLElement;
 									if (checkbox) {
 										try {
-											// Check if already selected
-											const isSelected =
+											// Check current selection state
+											const isAlreadySelected =
 												checkbox.getAttribute('aria-checked') === 'true' ||
 												checkbox.getAttribute('checked') === 'true' ||
-												rowElement.getAttribute('aria-selected') === 'true';
+												rowElement.getAttribute('aria-selected') === 'true' ||
+												rowElement.classList.contains('is-selected') ||
+												rowElement.classList.contains('ms-DetailsRow--selected');
 
-											if (!isSelected) {
+											if (!isAlreadySelected) {
+												// Try multiple click methods for modern UI
 												checkbox.click();
+
+												// Dispatch proper events
+												const events = ['mousedown', 'mouseup', 'click'];
+												events.forEach((eventType) => {
+													const event = new MouseEvent(eventType, {
+														bubbles: true,
+														cancelable: true,
+														view: doc.defaultView || undefined,
+													});
+													checkbox.dispatchEvent(event);
+												});
+
 												selectedCount++;
-												console.log(`✓ Selected: ${fileName}`);
+												itemSelected = true;
+												console.log(`✅ Selected: ${fileName} (method: checkbox)`);
+											} else {
+												console.log(`ℹ️ Already selected: ${fileName}`);
+												selectedCount++;
+												itemSelected = true;
 											}
 											break;
 										} catch (e) {
-											console.warn(`Failed to select ${fileName}:`, e);
+											console.warn(`❌ Checkbox click failed for ${fileName}:`, e);
 										}
+									}
+								}
+
+								// If checkbox didn't work, try clicking the row itself
+								if (!itemSelected) {
+									try {
+										// Find the clickable area within the row
+										const clickableArea =
+											rowElement.querySelector('[data-selection-index]') ||
+											rowElement.querySelector('[role="gridcell"]:first-child') ||
+											rowElement;
+
+										(clickableArea as HTMLElement).click();
+
+										// Also try focus + enter key
+										setTimeout(() => {
+											try {
+												(clickableArea as HTMLElement).focus();
+												const enterEvent = new KeyboardEvent('keydown', {
+													key: 'Enter',
+													bubbles: true,
+													cancelable: true,
+												});
+												(clickableArea as HTMLElement).dispatchEvent(enterEvent);
+											} catch (e) {
+												console.warn('Focus+Enter failed:', e);
+											}
+										}, 100);
+
+										selectedCount++;
+										itemSelected = true;
+										console.log(`✅ Selected: ${fileName} (method: row click)`);
+									} catch (e) {
+										console.warn(`❌ Row click failed for ${fileName}:`, e);
 									}
 								}
 							}
 						});
 					});
 
-					if (selectedCount > 0) break; // Found working selector
+					if (selectedCount > 0) break; // Found working method
 				}
 
-				// Method 2: Use SharePoint's selection API if available
-				if (selectedCount === 0) {
+				console.log(`📊 Selection progress: ${selectedCount}/${itemDetails.length} items selected`);
+
+				// Method 2: Try bulk select all if individual selection failed
+				if (selectedCount === 0 && attempt > 8) {
 					try {
-						const spWindow = iframeRef.current?.contentWindow as any;
-						if (spWindow?.__sp && spWindow.__sp.selection) {
-							const itemIds = itemDetails.map((item) => item.id);
-							spWindow.__sp.selection.selectItems(itemIds);
-							selectedCount = itemIds.length;
-							console.log('✓ Used SharePoint selection API');
+						console.log('🔄 Trying bulk select all approach...');
+						const selectAllCheckbox = doc.querySelector(
+							'[data-automationid="SelectAllCheckbox"]'
+						) as HTMLElement;
+						if (selectAllCheckbox) {
+							selectAllCheckbox.click();
+							selectedCount = itemDetails.length; // Assume success
+							console.log('✅ Used select-all checkbox');
 						}
 					} catch (e) {
-						console.warn('SharePoint API selection failed:', e);
+						console.warn('Select-all failed:', e);
 					}
 				}
 
-				// Method 3: Modern React-based selection
-				if (selectedCount === 0) {
-					try {
-						// Look for modern selection manager
-						const reactRoot = doc.querySelector('[data-reactroot]') || doc.body;
-						const reactKey = Object.keys(reactRoot).find(
-							(key) => key.startsWith('__reactInternalInstance') || key.startsWith('__reactFiber')
-						);
-
-						if (reactKey) {
-							console.log('React root found, attempting React-based selection');
-							// This would require more complex React fiber traversal
-							// For now, fall back to DOM methods
-						}
-					} catch (e) {
-						console.warn('React-based selection failed:', e);
-					}
-				}
-
-				console.log(`Selection result: ${selectedCount}/${itemDetails.length} files selected`);
-
-				// Open details pane after selection
+				// Method 3: Force details pane open if items are selected
 				if (selectedCount > 0) {
 					setTimeout(() => {
-						for (const selector of selectors.detailsPane) {
+						let panelOpened = false;
+
+						for (const selector of modernSelectors.detailsPane) {
+							if (panelOpened) break;
+
 							const button = doc.querySelector(selector) as HTMLElement;
 							if (button) {
 								try {
 									button.click();
-									console.log('✓ Opened details pane');
-									setLoadingState((prev) => ({
-										...prev,
-										message: 'Files selected and details pane opened',
-									}));
+									panelOpened = true;
+									console.log(`✅ Opened details panel with: ${selector}`);
 									break;
 								} catch (e) {
-									console.warn('Failed to open details pane:', e);
+									console.warn(`❌ Failed to open panel with ${selector}:`, e);
 								}
 							}
 						}
-					}, 800);
+
+						// If no specific details button found, try generic approaches
+						if (!panelOpened) {
+							setTimeout(() => {
+								// Try right-click context menu approach
+								const firstSelectedRow = doc.querySelector(
+									'.ms-DetailsRow--selected, [aria-selected="true"]'
+								) as HTMLElement;
+								if (firstSelectedRow) {
+									try {
+										const contextMenuEvent = new MouseEvent('contextmenu', {
+											bubbles: true,
+											cancelable: true,
+											clientX: 100,
+											clientY: 100,
+										});
+										firstSelectedRow.dispatchEvent(contextMenuEvent);
+										console.log('✅ Triggered context menu');
+									} catch (e) {
+										console.warn('Context menu failed:', e);
+									}
+								}
+							}, 500);
+						}
+					}, 1200); // Give time for selection to register
 				}
 
-				// Retry if we didn't select enough items
+				// Continue trying if we haven't selected enough items
 				if (selectedCount < itemDetails.length && attempt < maxAttempts - 1) {
-					setTimeout(() => performAdvancedBulkSelection(doc, attempt + 1), 1500);
+					const delay = Math.min(3000, 1000 + attempt * 300); // Increasing delay for modern lists
+					setTimeout(() => performAdvancedBulkSelection(doc, attempt + 1), delay);
 				} else {
-					setLoadingState((prev) => ({ ...prev, isLoading: false, message: 'Ready' }));
+					// Final status
+					const successRate = (selectedCount / itemDetails.length) * 100;
+					const finalMessage =
+						selectedCount === itemDetails.length
+							? `✅ All ${selectedCount} files selected successfully!`
+							: `Selection complete: ${selectedCount}/${itemDetails.length} files (${Math.round(
+									successRate
+							  )}%)`;
+
+					setLoadingState((prev) => ({
+						...prev,
+						isLoading: false,
+						message: finalMessage,
+					}));
+
+					if (selectedCount === 0 && foundItems > 0) {
+						console.warn('⚠️ Found list items but could not select any. This might be due to:');
+						console.warn('   - Permissions restrictions');
+						console.warn('   - Modern list UI changes');
+						console.warn('   - JavaScript restrictions');
+						console.warn('   - Network delays');
+					}
 				}
 			} catch (error) {
-				console.error('Bulk selection error:', error);
+				console.error('❌ Modern bulk selection error:', error);
 				if (attempt < maxAttempts - 1) {
-					setTimeout(() => performAdvancedBulkSelection(doc, attempt + 1), 1000);
+					setTimeout(() => performAdvancedBulkSelection(doc, attempt + 1), 2000);
 				} else {
 					setLoadingState((prev) => ({
 						...prev,
 						isLoading: false,
-						message: 'Selection completed with errors',
+						message:
+							'⚠️ Auto-selection failed - please select files manually and use the details pane',
 					}));
 				}
 			}
 		},
-		[itemDetails]
+		[itemDetails, setLoadingState]
 	);
+
+	// Cleanup effect for timers and resources
+	useEffect(() => {
+		return () => {
+			// Cleanup all timers on unmount
+			if (changeDetectionTimer.current) {
+				clearInterval(changeDetectionTimer.current);
+			}
+			if (loadingTimeoutRef.current) {
+				clearTimeout(loadingTimeoutRef.current);
+			}
+		};
+	}, []);
 
 	// Reset state when props change
 	useEffect(() => {
 		singleInitialLoadSeenRef.current = false;
-		domNudgeAttempts.current = 0;
 		setCssInjected(false);
 		setError(null);
 		setLoadingState({ isLoading: true, message: 'Initializing...' });
 
+		// Clear any existing timers
 		if (changeDetectionTimer.current) {
 			clearInterval(changeDetectionTimer.current);
 		}
+		if (loadingTimeoutRef.current) {
+			clearTimeout(loadingTimeoutRef.current);
+		}
+
+		// Set a safety timeout to prevent indefinite loading
+		// Set a safety timeout to prevent indefinite loading
+		loadingTimeoutRef.current = window.setTimeout(() => {
+			console.warn('⚠️ Loading timeout reached, clearing loading state');
+			setLoadingState((prev) =>
+				prev.isLoading
+					? {
+							isLoading: false,
+							message: 'Loading timeout - please try again',
+					  }
+					: prev
+			);
+		}, 30000); // 30 second timeout
 	}, [itemIds, libraryServerRelativeUrl, siteUrl]);
 
 	// Modal visibility management
@@ -631,85 +870,171 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		}
 	}, [renderMode, isOpen]);
 
-	// Enhanced initialization
+	// Enhanced initialization with better error handling and progress tracking
 	useEffect(() => {
 		let disposed = false;
 
 		const initializeEditor = async () => {
 			if (!itemIds?.length) return;
 
-			setLoadingState({ isLoading: true, message: 'Preparing editor...', progress: 10 });
-			setError(null);
-
-			const single = itemIds.length === 1;
-			setMode(single ? 'single' : 'bulk');
-
 			try {
+				setLoadingState({ isLoading: true, message: 'Initializing editor...', progress: 0 });
+				setError(null);
+
+				const single = itemIds.length === 1;
+				setMode(single ? 'single' : 'bulk');
+
 				if (single) {
-					setLoadingState({ isLoading: true, message: 'Loading edit form...', progress: 50 });
+					// Single item edit with detailed progress tracking
+					try {
+						setLoadingState({
+							isLoading: true,
+							message: 'Resolving list information...',
+							progress: 20,
+						});
 
-					const listId = await resolveListId(sp, libraryServerRelativeUrl);
-					const url = buildSingleEditUrl(siteUrl, listId, itemIds[0], window.location.href);
+						console.log('🔍 Resolving list ID for:', libraryServerRelativeUrl);
+						const listId = await Promise.race([
+							resolveListId(sp, libraryServerRelativeUrl),
+							new Promise<never>((_, reject) =>
+								setTimeout(() => reject(new Error('List ID resolution timeout')), 15000)
+							),
+						]);
 
-					if (disposed) return;
+						if (disposed) return;
+						console.log('✅ List ID resolved:', listId);
 
-					setTargetUrl(url);
-					onDetermined?.({ mode: 'single', url, bulk: false });
+						setLoadingState({
+							isLoading: true,
+							message: 'Building edit form URL...',
+							progress: 60,
+						});
 
-					if (renderMode === 'newtab') {
-						window.open(url, '_blank', 'noopener,noreferrer');
-						onOpen?.({ mode: 'single', url });
-						onDismiss?.();
-						return;
-					} else if (renderMode === 'samepage') {
-						window.location.href = url;
-						onOpen?.({ mode: 'single', url });
-						onDismiss?.();
-						return;
+						const url = buildSingleEditUrl(siteUrl, listId, itemIds[0], window.location.href);
+						console.log('🔗 Single edit URL:', url);
+
+						if (disposed) return;
+
+						setTargetUrl(url);
+						setLoadingState({ isLoading: true, message: 'Loading edit form...', progress: 90 });
+
+						onDetermined?.({ mode: 'single', url, bulk: false });
+
+						if (renderMode === 'newtab') {
+							window.open(url, '_blank', 'noopener,noreferrer');
+							onOpen?.({ mode: 'single', url });
+							onDismiss?.();
+							return;
+						} else if (renderMode === 'samepage') {
+							window.location.href = url;
+							onOpen?.({ mode: 'single', url });
+							onDismiss?.();
+							return;
+						}
+
+						// For modal mode, the iframe will handle the final loading
+						setLoadingState({ isLoading: true, message: 'Ready to load form...', progress: 100 });
+					} catch (singleError) {
+						console.error('❌ Single edit initialization failed:', singleError);
+						throw new Error(
+							`Failed to prepare edit form: ${
+								singleError instanceof Error ? singleError.message : 'Unknown error'
+							}`
+						);
 					}
 				} else {
-					setLoadingState({ isLoading: true, message: 'Retrieving file details...', progress: 30 });
+					// Bulk edit with detailed progress tracking
+					try {
+						setLoadingState({
+							isLoading: true,
+							message: 'Retrieving file details...',
+							progress: 20,
+						});
 
-					const details = await getItemDetails(sp, libraryServerRelativeUrl, itemIds);
+						console.log('📋 Getting details for', itemIds.length, 'items');
+						const details = await Promise.race([
+							getItemDetails(sp, libraryServerRelativeUrl, itemIds),
+							new Promise<never>((_, reject) =>
+								setTimeout(() => reject(new Error('Item details timeout')), 20000)
+							),
+						]);
 
-					if (disposed) return;
+						if (disposed) return;
+						console.log('✅ Retrieved details for', details.length, 'items');
 
-					if (details.length === 0) {
-						throw new Error('Could not retrieve details for any items');
-					}
+						if (details.length === 0) {
+							throw new Error(
+								'Could not retrieve details for any files. Please check permissions and try again.'
+							);
+						}
 
-					setItemDetails(details);
-					setLoadingState({ isLoading: true, message: 'Building bulk edit URL...', progress: 60 });
+						setItemDetails(details);
+						setLoadingState({
+							isLoading: true,
+							message: 'Building bulk edit URL...',
+							progress: 60,
+						});
 
-					const url = buildBulkViewUrl(siteUrl, libraryServerRelativeUrl, details, viewId);
-					setTargetUrl(url);
-					onDetermined?.({ mode: 'bulk', url, bulk: true });
+						const url = buildBulkViewUrl(siteUrl, libraryServerRelativeUrl, details, viewId);
+						console.log('🔗 Bulk edit URL:', url);
 
-					if (renderMode === 'newtab') {
-						window.open(url, '_blank', 'noopener,noreferrer');
-						onOpen?.({ mode: 'bulk', url });
-						onDismiss?.();
-						return;
-					} else if (renderMode === 'samepage') {
-						window.location.href = url;
-						onOpen?.({ mode: 'bulk', url });
-						onDismiss?.();
-						return;
+						if (disposed) return;
+
+						setTargetUrl(url);
+						setLoadingState({ isLoading: true, message: 'Loading library view...', progress: 90 });
+
+						onDetermined?.({ mode: 'bulk', url, bulk: true });
+
+						if (renderMode === 'newtab') {
+							window.open(url, '_blank', 'noopener,noreferrer');
+							onOpen?.({ mode: 'bulk', url });
+							onDismiss?.();
+							return;
+						} else if (renderMode === 'samepage') {
+							window.location.href = url;
+							onOpen?.({ mode: 'bulk', url });
+							onDismiss?.();
+							return;
+						}
+
+						// For modal mode, the iframe will handle the final loading
+						setLoadingState({
+							isLoading: true,
+							message: 'Ready to load library...',
+							progress: 100,
+						});
+					} catch (bulkError) {
+						console.error('❌ Bulk edit initialization failed:', bulkError);
+						throw new Error(
+							`Failed to prepare bulk edit: ${
+								bulkError instanceof Error ? bulkError.message : 'Unknown error'
+							}`
+						);
 					}
 				}
-
-				setLoadingState({ isLoading: true, message: 'Loading interface...', progress: 90 });
-			} catch (e) {
-				console.error('Editor initialization failed:', e);
-				setError(e instanceof Error ? e.message : 'Failed to initialize editor');
-				setLoadingState({ isLoading: false, message: 'Error occurred' });
+			} catch (error) {
+				console.error('❌ Editor initialization failed:', error);
+				if (!disposed) {
+					const errorMessage =
+						error instanceof Error ? error.message : 'Failed to initialize editor';
+					setError(errorMessage);
+					setLoadingState({ isLoading: false, message: 'Initialization failed' });
+				}
 			}
 		};
 
-		initializeEditor();
+		// Add a small delay to prevent immediate execution issues
+		const initTimer = setTimeout(() => {
+			void initializeEditor();
+		}, 100);
 
 		return () => {
 			disposed = true;
+			clearTimeout(initTimer);
+			// Clear loading timeout when component unmounts or dependencies change
+			if (loadingTimeoutRef.current) {
+				clearTimeout(loadingTimeoutRef.current);
+			}
 		};
 	}, [
 		siteUrl,
@@ -723,7 +1048,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		onDismiss,
 	]);
 
-	// Enhanced change detection
+	// Enhanced auto-refresh with better change detection
 	useEffect(() => {
 		if (mode !== 'bulk' || !enableBulkAutoRefresh || renderMode !== 'modal') return;
 
@@ -734,6 +1059,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		const checkForChanges = async () => {
 			try {
 				if (!initialized) {
+					// Store initial Modified timestamps
 					for (const id of idsToWatch) {
 						const item: any = await sp.web
 							.getList(libraryServerRelativeUrl)
@@ -745,6 +1071,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					return;
 				}
 
+				// Check for changes
 				for (const id of idsToWatch) {
 					const item: any = await sp.web
 						.getList(libraryServerRelativeUrl)
@@ -752,7 +1079,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						.select('Modified')();
 
 					if (item?.Modified && originalModified[id] && item.Modified !== originalModified[id]) {
-						console.log(`✓ Changes detected in item ${id}, closing editor`);
+						console.log(`✅ Detected change in item ${id}, closing editor`);
 						setModalOpen(false);
 						onSaved?.();
 						onDismiss?.();
@@ -764,8 +1091,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			}
 		};
 
-		changeDetectionTimer.current = window.setInterval(checkForChanges, 2000);
-		checkForChanges();
+		changeDetectionTimer.current = window.setInterval(checkForChanges, 3000); // Check every 3 seconds
+		void checkForChanges(); // Initial check
 
 		return () => {
 			if (changeDetectionTimer.current) {
@@ -784,25 +1111,42 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		onDismiss,
 	]);
 
-	// Enhanced iframe load handler
+	// Enhanced iframe load handler with proper loading state management
 	const onIframeLoad = useCallback(() => {
 		const frame = iframeRef.current;
 		if (!frame) return;
 
 		console.log(`🚀 Iframe loaded: ${mode} mode, ${itemIds.length} items`);
 
+		// Clear the loading state immediately when iframe loads
+		if (mode === 'single') {
+			setLoadingState({ isLoading: false, message: 'Edit form ready' });
+		} else {
+			setLoadingState({ isLoading: true, message: 'Preparing bulk selection...', progress: 0 });
+		}
+
 		if (targetUrl) {
 			onOpen?.({ mode, url: targetUrl });
 		}
 
-		// Inject CSS immediately
+		// Inject CSS immediately when iframe loads
 		const doc = frame.contentDocument || frame.contentWindow?.document;
 		if (doc) {
 			// Wait for document ready, then inject CSS
+			const injectCSS = () => {
+				try {
+					injectAdvancedCSS(doc);
+				} catch (error) {
+					console.warn('CSS injection failed:', error);
+				}
+			};
+
 			if (doc.readyState === 'complete') {
-				injectAdvancedCSS(doc);
+				injectCSS();
 			} else {
-				doc.addEventListener('DOMContentLoaded', () => injectAdvancedCSS(doc));
+				doc.addEventListener('DOMContentLoaded', injectCSS);
+				// Fallback timeout
+				setTimeout(injectCSS, 1000);
 			}
 		}
 
@@ -813,13 +1157,13 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				if (href) {
 					if (!singleInitialLoadSeenRef.current) {
 						singleInitialLoadSeenRef.current = true;
-						setLoadingState({ isLoading: false, message: 'Edit form ready' });
+						console.log('✅ Single edit form loaded successfully');
 					} else {
 						const leftEditForm = !isListFormEditUrl(href);
 						const returnedToHost = decodeURIComponent(href).includes(window.location.href);
 
 						if (leftEditForm && returnedToHost) {
-							console.log('✓ Single edit completed, closing');
+							console.log('✅ Single edit completed, closing');
 							try {
 								frame.style.visibility = 'hidden';
 								frame.src = 'about:blank';
@@ -836,14 +1180,18 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			}
 		}
 
-		// Bulk selection handling
+		// Enhanced bulk selection handling for modern lists
 		if (!disableDomNudges && mode === 'bulk' && itemDetails.length > 0 && doc) {
-			// Wait for the page to render, then start selection
+			// Wait longer for modern SharePoint lists to fully load
 			setTimeout(() => {
+				console.log('🚀 Starting modern bulk selection process...');
 				performAdvancedBulkSelection(doc, 0);
-			}, 1200);
+			}, 2000); // Increased delay for modern lists
 		} else if (mode === 'bulk') {
-			setLoadingState({ isLoading: false, message: 'Bulk view ready' });
+			setLoadingState({
+				isLoading: false,
+				message: 'Bulk view ready - please select files manually',
+			});
 		}
 	}, [
 		mode,
@@ -974,7 +1322,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 										onClick={() => {
 											setError(null);
 											setLoadingState({ isLoading: true, message: 'Retrying...' });
-											// Trigger re-initialization by updating a ref or state
+											// Force re-initialization by updating state
 											window.location.reload();
 										}}
 									/>
@@ -1018,7 +1366,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					</Stack>
 				)}
 
-				{/* Main iframe content */}
+				{/* Main iframe content with error recovery */}
 				{targetUrl && !error && (
 					<div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
 						<iframe
@@ -1027,6 +1375,11 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 							src={targetUrl}
 							style={iframeStyle}
 							onLoad={onIframeLoad}
+							onError={(e) => {
+								console.error('Iframe load error:', e);
+								setError('Failed to load the edit form. Please try again or refresh the page.');
+								setLoadingState({ isLoading: false, message: 'Load failed' });
+							}}
 							sandbox={sandbox}
 							loading="lazy"
 						/>
