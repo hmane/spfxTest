@@ -731,7 +731,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		}
 	}, [renderMode, isOpen]);
 
-	// 3. MAIN INITIALIZATION EFFECT (FIXED LOGIC)
+	// 3. MAIN INITIALIZATION EFFECT (FIXED LOGIC - STABLE DEPENDENCIES)
 	useEffect(() => {
 		// Don't initialize if no items or already initializing
 		if (!itemIds?.length || isInitializingRef.current) {
@@ -898,37 +898,38 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			}
 			isInitializingRef.current = false;
 		};
-	}, [
-		itemIds,
-		libraryServerRelativeUrl,
-		siteUrl,
-		viewId,
-		renderMode,
-		sp,
-		onDetermined,
-		onOpen,
-		onDismiss,
-	]);
+		// CRITICAL FIX: Use only stable props that won't change during initialization
+	}, [stableKey]); // Only depend on the stable key
 
-	// 4. Reset effect when key props change
+	// 4. Key change detection with proper state reset
+	const prevStableKeyRef = useRef<string>('');
 	useEffect(() => {
-		// Reset when essential props change
-		console.log('🔄 Props changed, resetting state');
-		isInitializingRef.current = false;
-		singleInitialLoadSeenRef.current = false;
-		setCssInjected(false);
-		setError(null);
-		setTargetUrl('');
-		setLoadingState({ isLoading: true, message: 'Initializing...' });
+		// Only reset when we get a genuinely new stable key (not on first render)
+		if (prevStableKeyRef.current && prevStableKeyRef.current !== stableKey) {
+			console.log('🔄 Essential props changed, resetting state', {
+				from: prevStableKeyRef.current,
+				to: stableKey,
+			});
 
-		// Clear existing timers
-		if (changeDetectionTimer.current) {
-			clearInterval(changeDetectionTimer.current);
+			// Reset initialization state
+			isInitializingRef.current = false;
+			singleInitialLoadSeenRef.current = false;
+			setCssInjected(false);
+			setError(null);
+			setTargetUrl('');
+			setLoadingState({ isLoading: true, message: 'Initializing...' });
+
+			// Clear existing timers
+			if (changeDetectionTimer.current) {
+				clearInterval(changeDetectionTimer.current);
+			}
+			if (loadingTimeoutRef.current) {
+				clearTimeout(loadingTimeoutRef.current);
+			}
 		}
-		if (loadingTimeoutRef.current) {
-			clearTimeout(loadingTimeoutRef.current);
-		}
-	}, [stableKey]); // Only reset when the stable key changes
+
+		prevStableKeyRef.current = stableKey;
+	}, [stableKey]);
 
 	// 5. Enhanced auto-refresh with better change detection (after initialization)
 	useEffect(() => {
