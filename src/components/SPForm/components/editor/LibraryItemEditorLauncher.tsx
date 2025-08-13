@@ -708,10 +708,10 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 	]);
 
 	// ============================================================================
-	// EFFECTS
+	// EFFECTS (PROPER ORDER)
 	// ============================================================================
 
-	// Cleanup effect for timers and resources
+	// 1. Cleanup effect for timers and resources (first)
 	useEffect(() => {
 		return () => {
 			if (changeDetectionTimer.current) {
@@ -723,59 +723,36 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		};
 	}, []);
 
-	// Modal visibility management
+	// 2. Modal visibility management
 	useEffect(() => {
 		if (renderMode === 'modal') {
 			setModalOpen(!!isOpen);
 		}
 	}, [renderMode, isOpen]);
 
-	// Reset state when props change
+	// 3. MAIN INITIALIZATION EFFECT (Fixed Logic)
 	useEffect(() => {
-		const shouldReset = !isInitialized || !targetUrl;
-
-		if (shouldReset) {
-			console.log('🔄 Resetting component state due to prop changes');
-			singleInitialLoadSeenRef.current = false;
-			setCssInjected(false);
-			setError(null);
-			setIsInitialized(false);
-			initializationRef.current = false;
-			setLoadingState({ isLoading: true, message: 'Initializing...' });
-
-			if (changeDetectionTimer.current) {
-				clearInterval(changeDetectionTimer.current);
-			}
-			if (loadingTimeoutRef.current) {
-				clearTimeout(loadingTimeoutRef.current);
-			}
-
-			loadingTimeoutRef.current = window.setTimeout(() => {
-				console.warn('⚠️ Loading timeout reached');
-				setLoadingState((prev) =>
-					prev.isLoading
-						? {
-								isLoading: false,
-								message: 'Loading timeout - please try again',
-						  }
-						: prev
-				);
-			}, 30000);
-		}
-	}, [stableKey, isInitialized, targetUrl]);
-
-	// Enhanced initialization - FIXED to prevent loops
-	useEffect(() => {
-		if (initializationRef.current || isInitialized || !itemIds?.length) {
+		// Don't initialize if no items or already initialized
+		if (!itemIds?.length || isInitialized) {
+			console.log('⏭️ Skipping initialization:', {
+				hasItems: !!itemIds?.length,
+				isInitialized,
+			});
 			return;
 		}
 
-		let disposed = false;
+		// Prevent concurrent initializations
+		if (initializationRef.current) {
+			console.log('⏭️ Initialization already in progress');
+			return;
+		}
+
+		console.log('🚀 Starting initialization for', itemIds.length, 'items');
 		initializationRef.current = true;
+		let disposed = false;
 
 		const initializeEditor = async () => {
 			try {
-				console.log('🚀 Starting editor initialization for', itemIds.length, 'items');
 				setLoadingState({ isLoading: true, message: 'Initializing editor...', progress: 0 });
 				setError(null);
 
@@ -783,6 +760,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				setMode(single ? 'single' : 'bulk');
 
 				if (single) {
+					console.log('📝 Initializing single edit mode');
 					setLoadingState({
 						isLoading: true,
 						message: 'Resolving list information...',
@@ -797,10 +775,12 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					]);
 
 					if (disposed) return;
+					console.log('✅ List ID resolved:', listId);
 
 					setLoadingState({ isLoading: true, message: 'Building edit form URL...', progress: 60 });
 
 					const url = buildSingleEditUrl(siteUrl, listId, itemIds[0], window.location.href);
+					console.log('🔗 Single edit URL built:', url);
 
 					if (disposed) return;
 
@@ -811,6 +791,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						onDetermined({ mode: 'single', url, bulk: false });
 					}
 
+					// Handle non-modal modes
 					if (renderMode === 'newtab') {
 						window.open(url, '_blank', 'noopener,noreferrer');
 						if (onOpen) onOpen({ mode: 'single', url });
@@ -822,9 +803,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						if (onDismiss) onDismiss();
 						return;
 					}
-
-					setIsInitialized(true);
 				} else {
+					console.log('📋 Initializing bulk edit mode');
 					setLoadingState({ isLoading: true, message: 'Retrieving file details...', progress: 20 });
 
 					const details = await Promise.race([
@@ -835,6 +815,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					]);
 
 					if (disposed) return;
+					console.log('✅ Retrieved details for', details.length, 'items');
 
 					if (details.length === 0) {
 						throw new Error(
@@ -846,6 +827,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					setLoadingState({ isLoading: true, message: 'Building bulk edit URL...', progress: 60 });
 
 					const url = buildBulkViewUrl(siteUrl, libraryServerRelativeUrl, details, viewId);
+					console.log('🔗 Bulk edit URL built:', url);
 
 					if (disposed) return;
 
@@ -856,6 +838,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						onDetermined({ mode: 'bulk', url, bulk: true });
 					}
 
+					// Handle non-modal modes
 					if (renderMode === 'newtab') {
 						window.open(url, '_blank', 'noopener,noreferrer');
 						if (onOpen) onOpen({ mode: 'bulk', url });
@@ -867,9 +850,11 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						if (onDismiss) onDismiss();
 						return;
 					}
-
-					setIsInitialized(true);
 				}
+
+				// Mark as successfully initialized
+				console.log('✅ Initialization completed successfully');
+				setIsInitialized(true);
 			} catch (error) {
 				console.error('❌ Editor initialization failed:', error);
 				if (!disposed) {
@@ -877,13 +862,31 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						error instanceof Error ? error.message : 'Failed to initialize editor';
 					setError(errorMessage);
 					setLoadingState({ isLoading: false, message: 'Initialization failed' });
+				}
+			} finally {
+				if (!disposed) {
 					initializationRef.current = false;
 				}
 			}
 		};
 
+		// Set safety timeout
+		loadingTimeoutRef.current = window.setTimeout(() => {
+			console.warn('⚠️ Loading timeout reached');
+			if (!disposed) {
+				setLoadingState({
+					isLoading: false,
+					message: 'Loading timeout - please try again',
+				});
+				setError('Loading took too long. Please try again.');
+			}
+		}, 30000);
+
+		// Start initialization with small delay
 		const initTimer = setTimeout(() => {
-			void initializeEditor();
+			if (!disposed) {
+				void initializeEditor();
+			}
 		}, 100);
 
 		return () => {
@@ -893,11 +896,44 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				clearTimeout(loadingTimeoutRef.current);
 			}
 		};
-	}, [stableKey, isInitialized]);
+	}, [
+		itemIds,
+		libraryServerRelativeUrl,
+		siteUrl,
+		viewId,
+		renderMode,
+		isInitialized,
+		sp,
+		onDetermined,
+		onOpen,
+		onDismiss,
+	]);
 
-	// Enhanced auto-refresh with better change detection
+	// 4. Reset effect when key props change
 	useEffect(() => {
-		if (mode !== 'bulk' || !enableBulkAutoRefresh || renderMode !== 'modal') return;
+		// Reset when essential props change
+		console.log('🔄 Props changed, resetting state');
+		setIsInitialized(false);
+		initializationRef.current = false;
+		singleInitialLoadSeenRef.current = false;
+		setCssInjected(false);
+		setError(null);
+		setTargetUrl('');
+		setLoadingState({ isLoading: true, message: 'Initializing...' });
+
+		// Clear existing timers
+		if (changeDetectionTimer.current) {
+			clearInterval(changeDetectionTimer.current);
+		}
+		if (loadingTimeoutRef.current) {
+			clearTimeout(loadingTimeoutRef.current);
+		}
+	}, [stableKey]); // Only reset when the stable key changes
+
+	// 5. Enhanced auto-refresh with better change detection (after initialization)
+	useEffect(() => {
+		if (mode !== 'bulk' || !enableBulkAutoRefresh || renderMode !== 'modal' || !isInitialized)
+			return;
 
 		const idsToWatch = bulkWatchAllItems ? itemIds : [itemIds[0]];
 		const originalModified: Record<number, string> = {};
@@ -954,6 +990,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		libraryServerRelativeUrl,
 		onSaved,
 		onDismiss,
+		isInitialized, // Added dependency
 	]);
 
 	// ============================================================================
