@@ -59,14 +59,28 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 		await this._refreshLibraries(); // resolve on load
 	}
 
+	private _normalizeGlobalCTs(): string[] | 'all' | undefined {
+		const raw = this.properties.globalAllowedContentTypeIds as any;
+		if (!raw) return undefined;
+		if (Array.isArray(raw)) return raw;
+		const s = String(raw).trim();
+		if (!s) return undefined;
+		if (s.toLowerCase() === 'all') return 'all';
+		return s
+			.split(',')
+			.map((p) => p.trim())
+			.filter(Boolean);
+	}
+
 	public render(): void {
 		const configured = this._resolvedLibraries.length > 0;
-
+		const globalCTs = this._normalizeGlobalCTs(); // 👈
 		const element: React.ReactElement = configured
 			? React.createElement(
 					ToastHost,
 					null,
 					React.createElement(UploadAndEditApp, {
+						
 						siteUrl: this.context.pageContext.web.absoluteUrl,
 						spfxContext: this.context,
 
@@ -76,7 +90,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 						showContentTypePicker: this.properties.showContentTypePicker ?? true,
 
 						libraries: this._resolvedLibraries,
-						globalAllowedContentTypeIds: this.properties.globalAllowedContentTypeIds,
+						globalAllowedContentTypeIds: globalCTs,
 
 						overwritePolicy: this.properties.overwritePolicy ?? 'suffix',
 
@@ -532,6 +546,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 			this._resolvedLibraries = [];
 		} finally {
 			this._resolving = false;
+			this.render();
 		}
 	}
 
