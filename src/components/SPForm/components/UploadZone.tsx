@@ -254,22 +254,20 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 						borderRadius: 10,
 						padding: 12,
 						background: '#faf9f8',
+						marginBottom: 8,
 					},
 				}}
 			>
-				<Text variant="mediumPlus" styles={{ root: { fontWeight: 600 } }}>
+				<span style={{ fontWeight: 600 }}>
 					{destination.libraryTitle || destination.libraryUrl}
-				</Text>
+				</span>
 				{destination.contentTypeName && (
-					<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
-						Content type:&nbsp;
-						<span style={{ fontWeight: 600 }}>{destination.contentTypeName}</span>
-					</Text>
+					<span style={{ color: '#605e5c', marginLeft: 8 }}>• {destination.contentTypeName}</span>
 				)}
 				{destination.folderPath && (
-					<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
-						Folder:&nbsp;<span style={{ fontWeight: 600 }}>{destination.folderPath}</span>
-					</Text>
+					<div style={{ color: '#605e5c', marginTop: 2 }}>
+						Folder: <b>{destination.folderPath}</b>
+					</div>
 				)}
 			</Stack>
 
