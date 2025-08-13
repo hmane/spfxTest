@@ -349,7 +349,6 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 	});
 	const [error, setError] = useState<string | null>(null);
 	const [cssInjected, setCssInjected] = useState<boolean>(false);
-	const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
 	// ============================================================================
 	// REFS AND MEMOIZED VALUES
@@ -360,7 +359,9 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 	const singleInitialLoadSeenRef = useRef(false);
 	const changeDetectionTimer = useRef<number>();
 	const loadingTimeoutRef = useRef<number>();
-	const initializationRef = useRef<boolean>(false);
+
+	// CRITICAL FIX: Use ref instead of state to prevent circular dependencies
+	const isInitializingRef = useRef<boolean>(false);
 
 	// Stable dependency tracking to prevent unnecessary re-initializations
 	const stableItemIds = useMemo(() => itemIds.join(','), [itemIds]);
@@ -730,25 +731,19 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		}
 	}, [renderMode, isOpen]);
 
-	// 3. MAIN INITIALIZATION EFFECT (Fixed Logic)
+	// 3. MAIN INITIALIZATION EFFECT (FIXED LOGIC)
 	useEffect(() => {
-		// Don't initialize if no items or already initialized
-		if (!itemIds?.length || isInitialized) {
+		// Don't initialize if no items or already initializing
+		if (!itemIds?.length || isInitializingRef.current) {
 			console.log('⏭️ Skipping initialization:', {
 				hasItems: !!itemIds?.length,
-				isInitialized,
+				isInitializing: isInitializingRef.current,
 			});
 			return;
 		}
 
-		// Prevent concurrent initializations
-		if (initializationRef.current) {
-			console.log('⏭️ Initialization already in progress');
-			return;
-		}
-
 		console.log('🚀 Starting initialization for', itemIds.length, 'items');
-		initializationRef.current = true;
+		isInitializingRef.current = true;
 		let disposed = false;
 
 		const initializeEditor = async () => {
@@ -784,8 +779,13 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 
 					if (disposed) return;
 
+					// CRITICAL FIX: Set URL BEFORE calling onDetermined and BEFORE marking complete
 					setTargetUrl(url);
-					setLoadingState({ isLoading: true, message: 'Ready to load form...', progress: 100 });
+					setLoadingState({
+						isLoading: true,
+						message: 'Edit form ready to load...',
+						progress: 100,
+					});
 
 					if (onDetermined) {
 						onDetermined({ mode: 'single', url, bulk: false });
@@ -831,8 +831,9 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 
 					if (disposed) return;
 
+					// CRITICAL FIX: Set URL BEFORE calling onDetermined and BEFORE marking complete
 					setTargetUrl(url);
-					setLoadingState({ isLoading: true, message: 'Ready to load library...', progress: 100 });
+					setLoadingState({ isLoading: true, message: 'Library ready to load...', progress: 100 });
 
 					if (onDetermined) {
 						onDetermined({ mode: 'bulk', url, bulk: true });
@@ -852,9 +853,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					}
 				}
 
-				// Mark as successfully initialized
+				// Mark as successfully complete
 				console.log('✅ Initialization completed successfully');
-				setIsInitialized(true);
 			} catch (error) {
 				console.error('❌ Editor initialization failed:', error);
 				if (!disposed) {
@@ -865,7 +865,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				}
 			} finally {
 				if (!disposed) {
-					initializationRef.current = false;
+					isInitializingRef.current = false;
 				}
 			}
 		};
@@ -879,6 +879,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					message: 'Loading timeout - please try again',
 				});
 				setError('Loading took too long. Please try again.');
+				isInitializingRef.current = false;
 			}
 		}, 30000);
 
@@ -895,6 +896,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			if (loadingTimeoutRef.current) {
 				clearTimeout(loadingTimeoutRef.current);
 			}
+			isInitializingRef.current = false;
 		};
 	}, [
 		itemIds,
@@ -902,7 +904,6 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		siteUrl,
 		viewId,
 		renderMode,
-		isInitialized,
 		sp,
 		onDetermined,
 		onOpen,
@@ -913,8 +914,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 	useEffect(() => {
 		// Reset when essential props change
 		console.log('🔄 Props changed, resetting state');
-		setIsInitialized(false);
-		initializationRef.current = false;
+		isInitializingRef.current = false;
 		singleInitialLoadSeenRef.current = false;
 		setCssInjected(false);
 		setError(null);
@@ -932,8 +932,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 
 	// 5. Enhanced auto-refresh with better change detection (after initialization)
 	useEffect(() => {
-		if (mode !== 'bulk' || !enableBulkAutoRefresh || renderMode !== 'modal' || !isInitialized)
-			return;
+		if (mode !== 'bulk' || !enableBulkAutoRefresh || renderMode !== 'modal' || !targetUrl) return;
 
 		const idsToWatch = bulkWatchAllItems ? itemIds : [itemIds[0]];
 		const originalModified: Record<number, string> = {};
@@ -990,7 +989,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		libraryServerRelativeUrl,
 		onSaved,
 		onDismiss,
-		isInitialized, // Added dependency
+		targetUrl, // Added dependency to ensure URL is ready
 	]);
 
 	// ============================================================================
@@ -1078,7 +1077,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						)}
 						{process.env.NODE_ENV === 'development' && (
 							<Text variant="small" styles={{ root: { color: '#666', fontFamily: 'monospace' } }}>
-								Mode: {mode} | Initialized: {isInitialized.toString()} | URL: {!!targetUrl}
+								Mode: {mode} | Initializing: {isInitializingRef.current.toString()} | URL:{' '}
+								{!!targetUrl}
 							</Text>
 						)}
 					</Stack>
