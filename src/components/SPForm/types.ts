@@ -88,10 +88,10 @@ export interface UploadAndEditWebPartProps {
 
 /** The user's destination selection for a batch */
 export interface DestinationChoice {
-	libraryUrl: string; // serverRelativeUrl
-	contentTypeId?: string; // optional; omitted if library has only one CT or CT picker hidden
-	folderPath?: string; // optional subfolder relative to library root
-	libraryTitle: string;
+	libraryUrl: string;
+	contentTypeId?: string;
+	folderPath?: string;
+	libraryTitle?: string;
 	contentTypeName?: string;
 }
 

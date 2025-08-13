@@ -1,8 +1,7 @@
 // src/webparts/UploadAndEdit/components/editor/LibraryItemEditorLauncher.tsx
-
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Dialog, DialogType, IconButton, Stack } from '@fluentui/react';
+import { Dialog, DialogType } from '@fluentui/react';
 
 import { spfi, SPFI } from '@pnp/sp';
 import { SPFx as PnP_SPFX } from '@pnp/sp';
@@ -12,7 +11,6 @@ import '@pnp/sp/items';
 
 export type RenderMode = 'modal' | 'samepage' | 'newtab';
 
-// If you already export these from types.ts, remove these and import instead.
 export interface LauncherDeterminedInfo {
 	mode: 'single' | 'bulk';
 	url: string;
@@ -24,40 +22,35 @@ export interface LauncherOpenInfo {
 }
 
 export interface LibraryItemEditorLauncherProps {
-	// Site + context
 	siteUrl: string;
 	spfxContext: any;
 
-	// Target
-	libraryServerRelativeUrl: string; // e.g. "/sites/Contoso/Shared Documents"
+	libraryServerRelativeUrl: string;
 	itemIds: number[];
-	contentTypeId?: string; // not used here (set during upload)
+	contentTypeId?: string;
 
-	// Optional: minimal view (GUID with no braces) for bulk
-	viewId?: string;
+	viewId?: string; // optional minimal view for bulk
 
-	// Render behavior
 	renderMode: RenderMode;
 	isOpen?: boolean; // modal only
 
-	// Lifecycle
 	onDetermined?: (info: LauncherDeterminedInfo) => void;
 	onOpen?: (info: LauncherOpenInfo) => void;
 	onSaved?: () => void;
 	onDismiss?: () => void;
 
-	// Bulk niceties
 	enableBulkAutoRefresh?: boolean;
 	bulkWatchAllItems?: boolean;
 
-	// DOM nudge controls
 	disableDomNudges?: boolean;
-
-	// Iframe sandbox extras
 	sandboxExtra?: string;
 
-	// Responsiveness
+	// UI niceties
 	autoHeightBestEffort?: boolean;
+
+	// Optional chrome hiders
+	hideBreadcrumbs?: boolean;
+	hideContentTypeField?: boolean;
 }
 
 /** Resolve list GUID from server-relative library URL */
@@ -89,11 +82,13 @@ function buildBulkViewUrl(
 	)}&openPane=1`;
 }
 
-/** Best-effort: detect when single edit returns to Source (saved or canceled) */
-function detectSingleSaveFromUrl(url: string, hostSource: string): boolean {
+function isListFormEditUrl(href: string): boolean {
 	try {
-		if (!url.includes('Source=')) return false;
-		return decodeURIComponent(url).includes(hostSource);
+		const u = new URL(href, window.location.origin);
+		return (
+			u.pathname.toLowerCase().includes('/_layouts/15/listform.aspx') &&
+			(u.search.toLowerCase().includes('pagetype=6') || u.searchParams.get('PageType') === '6')
+		);
 	} catch {
 		return false;
 	}
@@ -122,9 +117,10 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		sandboxExtra,
 
 		autoHeightBestEffort = true,
-	} = props;
 
-	const singleInitialLoadSeenRef = useRef(false);
+		hideBreadcrumbs = false,
+		hideContentTypeField = false,
+	} = props;
 
 	const [targetUrl, setTargetUrl] = useState<string>('');
 	const [mode, setMode] = useState<'single' | 'bulk'>(() =>
@@ -135,16 +131,19 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 	const sp = useMemo(() => spfi(siteUrl).using(PnP_SPFX(spfxContext)), [siteUrl, spfxContext]);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-	// keep modal state synced with prop
+	// single-form load guard
+	const singleInitialLoadSeenRef = useRef(false);
+
 	useEffect(() => {
 		if (renderMode === 'modal') setModalOpen(!!isOpen);
 	}, [renderMode, isOpen]);
 
+	// Reset guard when inputs change
 	useEffect(() => {
 		singleInitialLoadSeenRef.current = false;
 	}, [itemIds, libraryServerRelativeUrl, siteUrl]);
-	
-	// -------- determine the target URL (and fire onDetermined) --------
+
+	// Determine the target URL (and fire onDetermined)
 	useEffect(() => {
 		let disposed = false;
 		(async () => {
@@ -199,7 +198,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [siteUrl, libraryServerRelativeUrl, itemIds, viewId, renderMode]);
 
-	// -------- bulk auto-close by Modified polling --------
+	// Bulk auto-close by Modified polling
 	useEffect(() => {
 		if (mode !== 'bulk' || !enableBulkAutoRefresh || renderMode !== 'modal') return;
 		let timer: number | undefined;
@@ -241,7 +240,6 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 
 		timer = window.setInterval(tick, 5000);
 		tick();
-
 		return () => {
 			if (timer) window.clearInterval(timer);
 		};
@@ -257,23 +255,10 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		onDismiss,
 	]);
 
-	function isListFormEditUrl(href: string): boolean {
-		try {
-			const u = new URL(href, window.location.origin);
-			// PageType=6 => Edit form
-			return (
-				u.pathname.toLowerCase().includes('/_layouts/15/listform.aspx') &&
-				(u.search.toLowerCase().includes('pagetype=6') || u.searchParams.get('PageType') === '6')
-			);
-		} catch {
-			return false;
-		}
-	}
-
-	// -------- iframe load: fire onOpen, detect saved, DOM nudges --------
+	// Iframe load: onOpen + single save detection + bulk DOM nudges + CSS injection
 	const onIframeLoad = () => {
-		if (!iframeRef.current) return;
 		const frame = iframeRef.current;
+		if (!frame) return;
 
 		if (targetUrl) onOpen?.({ mode, url: targetUrl });
 
@@ -282,36 +267,100 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			try {
 				const href = (frame.contentWindow as any)?.location?.href as string | undefined;
 				if (href) {
-					// 1) First load of the edit form? Just mark it and return.
+					// First load is the edit form itself—don't close
 					if (!singleInitialLoadSeenRef.current) {
 						singleInitialLoadSeenRef.current = true;
-						return;
-					}
-					// 2) If not the edit form anymore AND the URL points back to our host,
-					//    treat it as saved/closed.
-					const leftEditForm = !isListFormEditUrl(href);
-					const returnedToHost = decodeURIComponent(href).includes(window.location.href);
-					if (leftEditForm && returnedToHost) {
-						setModalOpen(false);
-						onSaved?.();
-						onDismiss?.();
-						return;
+					} else {
+						// If we left the edit form and navigated to our Source (host page), close
+						const leftEditForm = !isListFormEditUrl(href);
+						const returnedToHost = decodeURIComponent(href).includes(window.location.href);
+						if (leftEditForm && returnedToHost) {
+							// Prevent showing the host page in the iframe while we close:
+							try {
+								frame.style.visibility = 'hidden';
+								frame.src = 'about:blank';
+							} catch {}
+							setModalOpen(false);
+							onSaved?.();
+							onDismiss?.();
+							return;
+						}
 					}
 				}
 			} catch {
-				/* ignore cross-origin quirks */
+				/* ignore */
 			}
 		}
 
-		// BULK: DOM nudges…
+		// Inject minimal CSS to hide chrome/breadcrumb/CT field (best effort)
+		try {
+			const doc = frame.contentDocument || frame.contentWindow?.document;
+			if (doc) {
+				const styleId = 'launcher-hide-chrome-css';
+				if (!doc.getElementById(styleId)) {
+					const css: string[] = [];
+					if (props.hideBreadcrumbs) {
+						css.push(
+							'.od-TopNav, .od-TopBar, .ms-CommandBar, .ms-Breadcrumb { display:none !important; }',
+							'[data-automationid="Breadcrumb"] { display:none !important; }'
+						);
+					}
+					if (props.hideContentTypeField) {
+						css.push(
+							'div[data-field="ContentType"], div[aria-label="Content type"], label:contains("Content type") { display:none !important; }',
+							'[data-automationid="ContentTypeSelector"] { display:none !important; }'
+						);
+					}
+					if (css.length) {
+						const style = doc.createElement('style');
+						style.id = styleId;
+						style.type = 'text/css';
+						style.appendChild(doc.createTextNode(css.join('\n')));
+						doc.head.appendChild(style);
+					}
+				}
+			}
+		} catch {
+			/* ignore */
+		}
+
+		// BULK DOM nudges
 		if (!disableDomNudges && mode === 'bulk') {
-			/* unchanged bulk nudge logic */
+			try {
+				const doc = frame.contentDocument || frame.contentWindow?.document;
+				if (!doc) return;
+
+				const openPane = () => {
+					const btn = doc.querySelector(
+						'[data-automationid="DetailsPaneButton"],button[name="OpenDetailsPane"]'
+					) as HTMLButtonElement | null;
+					btn?.click();
+				};
+
+				const selectByIds = (ids: number[]) => {
+					const rows = Array.from(doc.querySelectorAll('[role="row"]')) as HTMLElement[];
+					ids.forEach((id) => {
+						const match = rows.find((r) => r.innerText?.match(new RegExp(`(^|\\s)${id}(\\s|$)`)));
+						if (match) {
+							const cb = match.querySelector('[role="checkbox"]') as HTMLElement | null;
+							if (cb && cb.getAttribute('aria-checked') !== 'true') cb.click();
+							else (match as any).click?.();
+						}
+					});
+				};
+
+				setTimeout(() => {
+					selectByIds(itemIds);
+					openPane();
+				}, 400);
+			} catch {
+				/* ignore */
+			}
 		}
 	};
 
-	// -------- render (modal only) --------
+	// render (modal only)
 	if (renderMode === 'newtab' || renderMode === 'samepage') return null;
-
 
 	const iframeStyle: React.CSSProperties = {
 		width: '100%',
@@ -338,22 +387,11 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			maxWidth="98%"
 			modalProps={{ isBlocking: true }}
 		>
-			<Stack horizontal horizontalAlign="end">
-				<IconButton
-					aria-label="Close"
-					iconProps={{ iconName: 'Cancel' }}
-					onClick={() => {
-						setModalOpen(false);
-						onDismiss?.();
-					}}
-				/>
-			</Stack>
-
 			{!!targetUrl && (
 				<iframe
 					ref={iframeRef}
 					title="Edit properties"
-					src={targetUrl} // absolute; not the current page
+					src={targetUrl}
 					style={iframeStyle}
 					onLoad={onIframeLoad}
 					sandbox={sandbox}

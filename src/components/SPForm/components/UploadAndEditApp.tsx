@@ -1,3 +1,4 @@
+// src/webparts/UploadAndEdit/components/UploadAndEditApp.tsx
 import * as React from 'react';
 import { useMemo, useState } from 'react';
 import {
@@ -27,8 +28,8 @@ import { DestinationPicker } from './DestinationPicker';
 import { UploadZone } from './UploadZone';
 import { LibraryItemEditorLauncher } from './editor/LibraryItemEditorLauncher';
 import { useToasts } from './ToastHost';
-import { Placeholder } from '@pnp/spfx-controls-react/lib/Placeholder';
 import { DragDropFiles } from '@pnp/spfx-controls-react/lib/DragDropFiles';
+import { Placeholder } from '@pnp/spfx-controls-react/lib/Placeholder';
 
 type Props = {
 	siteUrl: string;
@@ -57,7 +58,6 @@ type Props = {
 	showLoading?: (msg?: string) => void;
 	hideLoading?: () => void;
 
-	// Optional: async confirm overwrite hook (true = overwrite, false = skip)
 	confirmOverwrite?: (fileName: string) => Promise<boolean>;
 };
 
@@ -65,22 +65,30 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 	const {
 		siteUrl,
 		spfxContext,
+
 		pickerMode,
 		renderMode,
 		selectionScope,
 		showContentTypePicker,
+
 		libraries,
 		globalAllowedContentTypeIds,
+
 		overwritePolicy,
+
 		enableBulkAutoRefresh,
 		bulkWatchAllItems,
+
 		buttonLabel = 'Upload files',
 		dropzoneHint = 'Drag & drop files here, or click Select files',
 		successToast,
+
 		disableDomNudges,
 		sandboxExtra,
+
 		showLoading,
 		hideLoading,
+
 		confirmOverwrite,
 	} = props;
 
@@ -99,7 +107,6 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 
 	const isConfigured = useMemo(() => Array.isArray(libraries) && libraries.length > 0, [libraries]);
 
-	// Button click uses a hidden input for “select files”
 	const fileInputRef = React.useRef<HTMLInputElement>(null);
 	const allowMultiple = selectionScope === 'multiple';
 
@@ -123,23 +130,40 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 	};
 
 	// Upload
-	const handleBatchComplete = (res: UploadBatchResult) => {
+	const handleBatchComplete = async (res: UploadBatchResult) => {
 		setUploadedItemIds(res.itemIds);
-		if (res.itemIds.length)
+
+		if (res.itemIds.length) {
 			push({
 				kind: 'success',
 				text: `Uploaded ${res.itemIds.length} file${
 					res.itemIds.length > 1 ? 's' : ''
-				}. Opening properties…`,
+				}. Preparing properties…`,
 			});
-		if (res.failed.length)
+		}
+		if (res.failed.length) {
 			push({
 				kind: 'warning',
 				text: `${res.failed.length} file${res.failed.length > 1 ? 's' : ''} skipped/failed.`,
 			});
+		}
+
+		// 🔒 Force ContentTypeId on ALL uploaded items BEFORE opening the form
+		if (choice?.contentTypeId && res.itemIds.length > 0) {
+			try {
+				showLoading?.('Setting content type…');
+				for (const id of res.itemIds) {
+					await spService.setItemContentType(choice.libraryUrl, id, choice.contentTypeId);
+				}
+			} catch {
+				// non-blocking
+			}
+		}
+
 		showLoading?.('Preparing edit form…');
 		setStage('editing');
 	};
+
 	const handleBatchCanceled = () => {
 		setStage('destination');
 	};
@@ -164,11 +188,15 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 		hideLoading?.();
 	};
 
-	// Inject per-library defaultFolder right before upload
+	// Enrich choice with library defaults/names for the UploadZone header
 	const choiceWithDefaultFolder = useMemo(() => {
 		if (!choice) return undefined;
 		const libCfg = libraries.find((l) => l.serverRelativeUrl === choice.libraryUrl);
-		return { ...choice, folderPath: libCfg?.defaultFolder };
+		return {
+			...choice,
+			folderPath: libCfg?.defaultFolder,
+			libraryTitle: choice.libraryTitle || libCfg?.label,
+		};
 	}, [choice, libraries]);
 
 	return (
@@ -221,7 +249,6 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 				)
 			)}
 
-			{/* One modal that hosts both steps */}
 			<Dialog
 				hidden={!dialogOpen}
 				onDismiss={handleDestinationCancel}
@@ -265,6 +292,7 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 							title={buttonLabel}
 							hint={dropzoneHint}
 							confirmOverwrite={confirmOverwrite}
+							autoStart={true}
 						/>
 					)}
 
@@ -286,6 +314,8 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 							disableDomNudges={disableDomNudges}
 							sandboxExtra={sandboxExtra}
 							autoHeightBestEffort
+							hideBreadcrumbs={true}
+							hideContentTypeField={true}
 						/>
 					)}
 				</Stack>
