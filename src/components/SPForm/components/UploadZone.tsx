@@ -1,18 +1,21 @@
-import * as React from 'react';
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
-	Stack,
-	ProgressIndicator,
-	Text,
 	DefaultButton,
-	PrimaryButton,
+	Link,
 	MessageBar,
 	MessageBarType,
-	Link,
+	PrimaryButton,
+	ProgressIndicator,
+	Stack,
+	Text,
 } from '@fluentui/react';
-import { debounce } from '../utils';
+import * as React from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DestinationChoice, OverwritePolicy, SharePointService, UploadBatchResult } from '../types';
-
+import { debounce } from '../utils';
+type OneResult =
+	| { status: 'done'; itemId: number }
+	| { status: 'skipped' }
+	| { status: 'error'; errorMessage: string };
 export interface UploadZoneProps {
 	destination: DestinationChoice; // may include libraryTitle/contentTypeName/folderPath
 	spService: SharePointService;
@@ -105,21 +108,22 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		onBatchCanceled?.();
 	};
 
-	// ---- single-file upload primitive (with retry support) ----
-	const uploadOne = useCallback(
-		async (index: number): Promise<void> => {
-			const row = rows[index];
-			if (!row) return;
+	// add a return type for one-file attempt
 
-			// set "starting" so UI doesn't look frozen prior to first progress callback
+	// CHANGE uploadOne: return OneResult instead of void
+	const uploadOne = useCallback(
+		async (index: number): Promise<OneResult> => {
+			const row = rows[index];
+			if (!row) return { status: 'skipped' };
+
+			// mark starting
 			setRows((prev) => {
 				const n = [...prev];
 				n[index] = { ...n[index], status: 'starting', percent: 0, errorMessage: undefined };
 				return n;
 			});
 
-			// decide effective policy for this attempt
-			let effectivePolicy = overwritePolicy;
+			// existence preflight (unchanged logic)
 			try {
 				const exists = await spService.fileExists(
 					destination.libraryUrl,
@@ -128,7 +132,6 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 				);
 				if (exists) {
 					if (overwritePolicy === 'skip') {
-						// mark skipped & bail
 						setRows((prev) => {
 							const n = [...prev];
 							n[index] = {
@@ -139,12 +142,11 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 							};
 							return n;
 						});
-						return;
+						return { status: 'skipped' };
 					}
 					if (overwritePolicy === 'overwrite' && confirmOverwrite) {
 						const ok = await confirmOverwrite(row.file.name);
 						if (!ok) {
-							// treat as skipped
 							setRows((prev) => {
 								const n = [...prev];
 								n[index] = {
@@ -155,16 +157,15 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 								};
 								return n;
 							});
-							return;
+							return { status: 'skipped' };
 						}
 					}
-					// suffix policy handled inside upload if needed
+					// suffix handled in service
 				}
 			} catch {
-				// ignore preflight errors; proceed to upload
+				// ignore and proceed
 			}
 
-			// progress updater with debouncing (smoother UI)
 			const updatePct = debounce((pct: number) => {
 				setRows((prev) => {
 					const n = [...prev];
@@ -184,7 +185,9 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 					destination.folderPath,
 					row.file,
 					updatePct,
-					effectivePolicy,
+					overwritePolicy,
+					2 * 1024 * 1024, // 2MB chunk for earlier callbacks
+					overwritePolicy === 'overwrite' ? confirmOverwrite : undefined
 				);
 
 				setRows((prev) => {
@@ -198,6 +201,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 					};
 					return n;
 				});
+				return { status: 'done', itemId };
 			} catch (e: any) {
 				const message = (e && (e.message || e.toString())) || 'Upload failed';
 				setRows((prev) => {
@@ -210,6 +214,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 					};
 					return n;
 				});
+				return { status: 'error', errorMessage: message };
 			}
 			// eslint-disable-next-line react-hooks/exhaustive-deps
 		},
@@ -217,49 +222,51 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 			rows,
 			destination.libraryUrl,
 			destination.folderPath,
+			destination.contentTypeId,
 			overwritePolicy,
 			confirmOverwrite,
 			spService,
 		]
 	);
 
-	// ---- whole-batch uploader (sequential) ----
+	// CHANGE startUpload: collect results locally and pass them up
 	const startUpload = useCallback(async () => {
 		if (!rows.length) return;
 		setUploading(true);
 		setCanceled(false);
 		setErrorMsg(null);
 
+		const itemIds: number[] = [];
+		const failed: Array<{ name: string; message: string }> = [];
+		const skipped: string[] = [];
+
 		for (let i = 0; i < rows.length; i++) {
 			if (canceled) break;
-			// only upload queued/starting/error (allow retry)
 			const st = rows[i].status;
 			if (st === 'queued' || st === 'starting' || st === 'error') {
 				// eslint-disable-next-line no-await-in-loop
-				await uploadOne(i);
+				const res = await uploadOne(i);
+				if (res.status === 'done') {
+					itemIds.push(res.itemId);
+				} else if (res.status === 'error') {
+					failed.push({ name: rows[i].file.name, message: res.errorMessage });
+				} else {
+					skipped.push(rows[i].file.name);
+				}
 			}
 		}
 
 		setUploading(false);
 		if (canceled) return;
 
+		const final = { itemIds, failed, skipped };
+
 		if (launchEditorOnComplete) {
-			// Original behavior: notify parent immediately
-			onBatchComplete?.(summary);
+			onBatchComplete?.(final);
 		} else {
-			// New optional pattern: wait for user to click "Continue"
-			// Parent can show a "Continue" button via onRequestProceed
-			onRequestProceed?.(summary);
+			onRequestProceed?.(final);
 		}
-	}, [
-		rows,
-		canceled,
-		uploadOne,
-		launchEditorOnComplete,
-		onBatchComplete,
-		onRequestProceed,
-		summary,
-	]);
+	}, [rows, canceled, uploadOne, launchEditorOnComplete, onBatchComplete, onRequestProceed]);
 
 	// auto-start uploads when mounted / when rows change from picker
 	const didAutoStartRef = useRef(false);

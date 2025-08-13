@@ -126,12 +126,14 @@ export interface SharePointService {
 	getLibraryContentTypes(libraryUrl: string): Promise<ContentTypeInfo[]>;
 	getLibraryTitle(libraryUrl: string): Promise<string>;
 	uploadFileWithProgress(
-		libraryUrl: string,
+		libraryServerRelativeUrl: string,
 		folderPath: string | undefined,
 		file: File,
-		onProgress: (pct: number) => void,
-		overwritePolicy: OverwritePolicy
-	): Promise<{ itemId: number }>;
+		onPct: (pct: number) => void,
+		overwritePolicy: OverwritePolicy,
+		chunkSizeBytes?: number,
+		confirmOverwrite?: (fileName: string) => Promise<boolean>,
+	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }>;
 	setItemContentType(libraryUrl: string, itemId: number, contentTypeId: string): Promise<void>;
 
 	fileExists(
