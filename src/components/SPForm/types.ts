@@ -91,6 +91,8 @@ export interface DestinationChoice {
 	libraryUrl: string; // serverRelativeUrl
 	contentTypeId?: string; // optional; omitted if library has only one CT or CT picker hidden
 	folderPath?: string; // optional subfolder relative to library root
+	libraryTitle: string;
+	contentTypeName?: string;
 }
 
 /** A single file queued for upload */
@@ -139,16 +141,8 @@ export interface SharePointService {
 
 // ---------- Launcher/Editor events ----------
 
-export interface LauncherDeterminedInfo {
-	mode: LauncherEventMode;
-	url: string;
-}
-
-export interface LauncherOpenInfo {
-	mode: LauncherEventMode;
-	url: string;
-}
-
+export type LauncherDeterminedInfo = { mode: 'single' | 'bulk'; url: string; bulk: boolean };
+export type LauncherOpenInfo = { mode: 'single' | 'bulk'; url: string };
 export interface LauncherMetrics {
 	msToDetermined?: number;
 	msToOpen?: number;

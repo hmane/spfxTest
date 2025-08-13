@@ -236,7 +236,27 @@ export const DestinationPicker: React.FC<DestinationPickerProps> = (props) => {
 		}
 
 		if (!libUrl) return;
-		onSubmit({ libraryUrl: libUrl, contentTypeId: ctId });
+
+		// compute friendly names
+		const libraryTitle =
+			libraries.find((l) => l.serverRelativeUrl === libUrl)?.label ||
+			libTitles[libUrl] ||
+			libUrl.split('/').pop() ||
+			libUrl;
+
+		const contentTypeName =
+			(activeTab === 'library'
+				? (ctsByLib[libUrl] || []).find((ct) => ct.id === ctId)?.name
+				: // content-type-first (grouped)
+				  (allCTGroupedOptions.find((o) => o.key === ctId)?.text as string)) || undefined;
+
+		// include names in the payload (optional props)
+		onSubmit({
+			libraryUrl: libUrl,
+			contentTypeId: ctId,
+			libraryTitle,
+			contentTypeName,
+		});
 	};
 
 	// Render helpers
