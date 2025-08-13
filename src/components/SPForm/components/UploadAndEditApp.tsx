@@ -93,7 +93,7 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 	} = props;
 
 	const spService = useMemo(
-		() => createSharePointService("A", null),
+		() => createSharePointService(),
 		[siteUrl, spfxContext]
 	);
 	const { push } = useToasts();

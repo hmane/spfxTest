@@ -1,50 +1,59 @@
 // PnPjs features (extend SPFI surface)
+import { SPFI } from '@pnp/sp';
 import '@pnp/sp/content-types/list';
-import { spfi, SPFI } from '@pnp/sp';
-import { SPFx } from '@pnp/sp';
-import '@pnp/sp/webs';
-import '@pnp/sp/lists';
-import '@pnp/sp/folders';
 import '@pnp/sp/files';
-import '@pnp/sp/items';
 import type { IFileUploadProgressData } from '@pnp/sp/files';
+import '@pnp/sp/folders';
+import '@pnp/sp/items';
+import '@pnp/sp/lists';
+import '@pnp/sp/webs';
+import { Context } from '../../context/pnpjs-config';
 
 export type OverwritePolicy = 'overwrite' | 'skip' | 'suffix';
 
 export type ContentTypeLite = {
-  id: string;          // StringId
-  name: string;        // Name
+	id: string; // StringId
+	name: string; // Name
 };
 
 export interface SharePointService {
-  /** Check if a file exists in (library + optional subfolder) */
-  fileExists(libraryServerRelativeUrl: string, folderPath: string | undefined, fileName: string): Promise<boolean>;
+	getLibraryTitle(libraryUrl: string): Promise<string>;
+	/** Check if a file exists in (library + optional subfolder) */
+	fileExists(
+		libraryServerRelativeUrl: string,
+		folderPath: string | undefined,
+		fileName: string
+	): Promise<boolean>;
 
-  /**
-   * Upload a file with progress + overwrite policy handling.
-   * - Uses chunked upload under the hood
-   * - Returns created list item id (resolved via file GUID)
-   */
-  uploadFileWithProgress(
-    libraryServerRelativeUrl: string,
-    folderPath: string | undefined,
-    file: File,
-    onPct: (pct: number) => void,
-    overwritePolicy: OverwritePolicy,
-    chunkSizeBytes?: number,
-    confirmOverwrite?: (fileName: string) => Promise<boolean>
-  ): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }>;
+	/**
+	 * Upload a file with progress + overwrite policy handling.
+	 * - Uses chunked upload under the hood
+	 * - Returns created list item id (resolved via file GUID)
+	 */
+	uploadFileWithProgress(
+		libraryServerRelativeUrl: string,
+		folderPath: string | undefined,
+		file: File,
+		onPct: (pct: number) => void,
+		overwritePolicy: OverwritePolicy,
+		chunkSizeBytes?: number,
+		confirmOverwrite?: (fileName: string) => Promise<boolean>
+	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }>;
 
-  /** Force an item’s content type */
-  setItemContentType(libraryServerRelativeUrl: string, itemId: number, contentTypeId: string): Promise<void>;
+	/** Force an item’s content type */
+	setItemContentType(
+		libraryServerRelativeUrl: string,
+		itemId: number,
+		contentTypeId: string
+	): Promise<void>;
 
-  /** Get content types available for a library (optionally filtered) */
-  getLibraryContentTypes(libraryServerRelativeUrl: string): Promise<ContentTypeLite[]>;
+	/** Get content types available for a library (optionally filtered) */
+	getLibraryContentTypes(libraryServerRelativeUrl: string): Promise<ContentTypeLite[]>;
 }
 
-export function createSharePointService(siteUrl: string, spfxContext: any): SharePointService {
-  const sp = spfi(siteUrl).using(SPFx(spfxContext));
-  return new PnpSharePointService(sp);
+export function createSharePointService(): SharePointService {
+	const sp = Context.getContext().sp;
+	return new PnpSharePointService(sp);
 }
 
 /* --------------------------------- Impl --------------------------------- */
@@ -73,6 +82,11 @@ class PnpSharePointService implements SharePointService {
 		}
 	}
 
+	public async getLibraryTitle(libraryUrl: string): Promise<string> {
+		const library = await this.sp.web.getList(libraryUrl).select('Title')();
+		return library.Title;
+	}
+
 	public async uploadFileWithProgress(
 		libraryServerRelativeUrl: string,
 		folderPath: string | undefined,
@@ -80,7 +94,7 @@ class PnpSharePointService implements SharePointService {
 		onPct: (pct: number) => void,
 		overwritePolicy: OverwritePolicy,
 		chunkSizeBytes?: number,
-		confirmOverwrite?: (fileName: string) => Promise<boolean>,
+		confirmOverwrite?: (fileName: string) => Promise<boolean>
 	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }> {
 		// ---- resolve folder once & set up per-call caches ----
 		const folderUrl = normalizeFolderUrl(libraryServerRelativeUrl, folderPath);
@@ -201,16 +215,20 @@ class PnpSharePointService implements SharePointService {
 /* ----------------------------- helpers ----------------------------- */
 
 function splitNameAndExt(fileName: string): { name: string; ext: string } {
-  const idx = fileName.lastIndexOf('.');
-  if (idx <= 0) return { name: fileName, ext: '' };
-  return { name: fileName.substring(0, idx), ext: fileName.substring(idx) };
+	const idx = fileName.lastIndexOf('.');
+	if (idx <= 0) return { name: fileName, ext: '' };
+	return { name: fileName.substring(0, idx), ext: fileName.substring(idx) };
 }
 
 function normalizeFolderUrl(libraryServerRelativeUrl: string, folderPath?: string): string {
-  if (!folderPath) return libraryServerRelativeUrl;
-  // Safe join: "/sites/x/Lib" + "My/Folder" => "/sites/x/Lib/My/Folder"
-  const joined = `${stripTrailingSlash(libraryServerRelativeUrl)}/${stripLeadingSlash(folderPath)}`;
-  return joined.replace(/\/+/g, '/');
+	if (!folderPath) return libraryServerRelativeUrl;
+	// Safe join: "/sites/x/Lib" + "My/Folder" => "/sites/x/Lib/My/Folder"
+	const joined = `${stripTrailingSlash(libraryServerRelativeUrl)}/${stripLeadingSlash(folderPath)}`;
+	return joined.replace(/\/+/g, '/');
 }
-function stripLeadingSlash(s: string)  { return s?.startsWith('/') ? s.slice(1) : s; }
-function stripTrailingSlash(s: string) { return s?.endsWith('/')  ? s.slice(0, -1) : s; }
+function stripLeadingSlash(s: string) {
+	return s?.startsWith('/') ? s.slice(1) : s;
+}
+function stripTrailingSlash(s: string) {
+	return s?.endsWith('/') ? s.slice(0, -1) : s;
+}

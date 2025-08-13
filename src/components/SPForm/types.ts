@@ -122,7 +122,6 @@ export interface UploadBatchResult {
 // ---------- Services contracts ----------
 
 export interface SharePointService {
-	ensureFolder(libraryUrl: string, folderPath?: string): Promise<void>;
 	getLibraryContentTypes(libraryUrl: string): Promise<ContentTypeInfo[]>;
 	getLibraryTitle(libraryUrl: string): Promise<string>;
 	uploadFileWithProgress(
