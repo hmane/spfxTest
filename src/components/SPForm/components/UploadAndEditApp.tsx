@@ -224,25 +224,6 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 					});
 				}
 
-				// Set content type if specified
-				if (choice?.contentTypeId && res.itemIds.length > 0) {
-					try {
-						setLoading(true, 'Setting content type...');
-						await Promise.all(
-							res.itemIds.map((id) =>
-								spService.setItemContentType(choice.libraryUrl, id, choice.contentTypeId!)
-							)
-						);
-					} catch (error) {
-						const formattedError = handleError(error, 'Content Type Assignment');
-						console.warn('Failed to set content type:', formattedError);
-						pushToast({
-							kind: 'warning',
-							text: 'Content type could not be set automatically',
-						});
-					}
-				}
-
 				if (res.itemIds.length > 0) {
 					setLoading(true, 'Preparing edit form...');
 					setStage('editing');
@@ -338,7 +319,12 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 				/>
 			) : (
 				!dialogOpen && (
-					<DragDropFiles onDrop={(files: File[]) => handleFilesPicked(files)} dropEffect="copy">
+					<DragDropFiles
+						onDrop={(files: File[] | FileList) =>
+							handleFilesPicked(Array.isArray(files) ? files : Array.from(files as any))
+						}
+						dropEffect="copy"
+					>
 						<Stack
 							tokens={{ childrenGap: 8 }}
 							styles={{

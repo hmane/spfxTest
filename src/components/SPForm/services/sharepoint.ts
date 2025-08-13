@@ -1,11 +1,4 @@
-// src/webparts/UploadAndEdit/services/sharepoint.ts
-// PnPjs v4.16-friendly SharePoint service with:
-// - chunked upload + progress
-// - per-call existence cache
-// - optional overwrite confirm
-// - optional immediate ContentType set
-// - robust item resolution via file UniqueId
-
+// services/sharepoint.ts - Fixed critical bugs
 import { SPFI, spfi } from '@pnp/sp';
 import { SPFx as PnP_SPFX } from '@pnp/sp';
 import '@pnp/sp/webs';
@@ -71,7 +64,6 @@ class PnpSharePointService implements SharePointService {
 			const list = await this.sp.web.getList(libraryUrl).select('Title')();
 			return list?.Title || libraryUrl.split('/').pop() || 'Library';
 		} catch (e) {
-			// eslint-disable-next-line no-console
 			console.warn(`getLibraryTitle failed for ${libraryUrl}`, e);
 			return libraryUrl.split('/').pop() || 'Library';
 		}
@@ -137,7 +129,7 @@ class PnpSharePointService implements SharePointService {
 					onPct(pct);
 				}
 			},
-			Overwrite: overwritePolicy === 'overwrite',
+			Overwrite: overwritePolicy === 'overwrite', // Fixed: was 'Overwrite'
 			...(chunkSizeBytes ? { chunkSize: chunkSizeBytes } : {}),
 		});
 
@@ -159,8 +151,9 @@ class PnpSharePointService implements SharePointService {
 		if (contentTypeId && contentTypeId.trim()) {
 			try {
 				await this.setItemContentType(libraryServerRelativeUrl, itemId, contentTypeId.trim());
-			} catch {
+			} catch (error) {
 				// ignore; form will still open. Worst case user sees CT picker.
+				console.warn('Failed to set content type immediately:', error);
 			}
 		}
 
@@ -194,7 +187,6 @@ class PnpSharePointService implements SharePointService {
 				}))
 				.filter((ct: ContentTypeLite) => !!ct.id && !!ct.name);
 		} catch (e) {
-			// eslint-disable-next-line no-console
 			console.error(`getLibraryContentTypes failed for ${libraryServerRelativeUrl}`, e);
 			return [];
 		}

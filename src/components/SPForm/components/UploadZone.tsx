@@ -1,4 +1,4 @@
-// components/UploadZone.tsx
+// components/UploadZone.tsx - ESLint compliant
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
 	Stack,
@@ -72,6 +72,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 	const isMountedRef = useRef(true);
 	const startingRef = useRef<boolean>(false); // prevent double start
 
+	// Initialize files from props
 	useEffect(() => {
 		const next: FileUploadState[] = initialFiles.map((file) => ({
 			file,
@@ -87,6 +88,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		startingRef.current = false;
 	}, [initialFiles]);
 
+	// Cleanup on unmount
 	useEffect(() => {
 		return () => {
 			isMountedRef.current = false;
@@ -94,6 +96,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		};
 	}, []);
 
+	// Calculate overall progress
 	const overallProgress = useMemo(() => {
 		if (files.length === 0) return 0;
 		const nonSkipped = files.filter((f) => f.status !== 'skipped');
@@ -102,6 +105,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		return Math.round(total / nonSkipped.length);
 	}, [files]);
 
+	// Update file state helper
 	const updateFileState = useCallback((index: number, updates: Partial<FileUploadState>) => {
 		if (!isMountedRef.current) return;
 		setFiles((prev) => {
@@ -111,15 +115,18 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		});
 	}, []);
 
+	// Upload single file with proper error handling
 	const uploadOne = useCallback(
 		async (index: number): Promise<OneResult> => {
-			const snapshot = files[index];
+			// Get current file state
+			const currentFiles = files;
+			const snapshot = currentFiles[index];
 			if (!snapshot || isCanceled || !isMountedRef.current) return { status: 'skipped' };
 
 			const fileId = `${index}-${snapshot.file.name}`;
 			activeUploadsRef.current.add(fileId);
 
-			// show an indeterminate “Starting…” until the first progress tick
+			// show an indeterminate "Starting…" until the first progress tick
 			updateFileState(index, { status: 'starting', percent: 0, errorMessage: undefined });
 
 			// throttle progress updates to ~10fps
@@ -159,7 +166,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 			} catch (e: any) {
 				if (!isMountedRef.current) return { status: 'skipped' };
 
-				// Prefer our service’s skip flag if present
+				// Prefer our service's skip flag if present
 				const isSkip =
 					e && (e.__skip__ === true || /already exists|policy=skip/i.test(e.message || ''));
 				if (isSkip) {
@@ -183,6 +190,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 				activeUploadsRef.current.delete(fileId);
 			}
 		},
+		// ESLint fix: include all dependencies
 		[
 			files,
 			isCanceled,
@@ -196,6 +204,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		]
 	);
 
+	// Retry upload for failed files
 	const retryUpload = useCallback(
 		async (index: number) => {
 			if (isUploading || isCanceled) return;
@@ -205,6 +214,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		[isUploading, isCanceled, updateFileState, uploadOne]
 	);
 
+	// Start batch upload with proper concurrency control
 	const startUpload = useCallback(async () => {
 		if (files.length === 0 || isUploading || startingRef.current) return;
 		startingRef.current = true;
@@ -213,7 +223,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		setIsCanceled(false);
 		setErrorMsg(null);
 
-		// local result accumulator (don’t rely on React state timing)
+		// local result accumulator (don't rely on React state timing)
 		const itemIds: number[] = [];
 		const failed: Array<{ name: string; message: string }> = [];
 		const skipped: string[] = [];
@@ -262,6 +272,7 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		}
 	}, [files, isUploading, isCanceled, maxConcurrentUploads, uploadOne, onBatchComplete]);
 
+	// Cancel upload operation
 	const cancelUpload = useCallback(() => {
 		setIsCanceled(true);
 		setIsUploading(false);
@@ -269,13 +280,17 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		onBatchCanceled?.();
 	}, [onBatchCanceled]);
 
+	// Auto-start upload when conditions are met
 	useEffect(() => {
 		if (autoStart && files.length > 0 && !isUploading && !isCanceled) {
 			const hasQueued = files.some((f) => f.status === 'queued');
-			if (hasQueued) startUpload();
+			if (hasQueued) {
+				startUpload();
+			}
 		}
 	}, [autoStart, files, isUploading, isCanceled, startUpload]);
 
+	// Progress callback to parent
 	useEffect(() => {
 		if (!onProgress) return;
 		const progress: FileProgress[] = files.map((f) => ({
@@ -288,7 +303,8 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		onProgress(progress);
 	}, [files, onProgress]);
 
-	const getStatusIcon = (status: FileProgress['status']) => {
+	// Helper to get status icon
+	const getStatusIcon = useCallback((status: FileProgress['status']) => {
 		switch (status) {
 			case 'done':
 				return <Icon iconName="CheckMark" style={{ color: '#107c10' }} />;
@@ -302,15 +318,16 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 			default:
 				return <Icon iconName="Clock" style={{ color: '#605e5c' }} />;
 		}
-	};
+	}, []);
 
-	const formatFileSize = (bytes: number): string => {
+	// Helper to format file size
+	const formatFileSize = useCallback((bytes: number): string => {
 		if (bytes === 0) return '0 Bytes';
 		const k = 1024;
 		const sizes = ['Bytes', 'KB', 'MB', 'GB'];
 		const i = Math.floor(Math.log(bytes) / Math.log(k));
 		return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-	};
+	}, []);
 
 	return (
 		<Stack tokens={{ childrenGap: 16 }}>

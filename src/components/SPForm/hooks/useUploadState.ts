@@ -1,15 +1,52 @@
-// hooks/useUploadState.ts - Centralized state management
+// hooks/useUploadState.ts - Fixed with proper imports
 import { useState, useCallback, useReducer, useMemo } from 'react';
+
+// Import from SPForm types, not utils/types
 import {
 	DestinationChoice,
-	UseUploadState,
-	SPFormError,
-	ComponentCallbacks,
-	ConfigValidationResult,
-    ComponentStage,
-    ComponentState,
-} from '../../utils/types';
+	ComponentState,
+	UploadBatchResult,
+	ComponentStage,
+} from '../types';
 
+
+// These types need to be added to your SPForm/types.ts
+export interface UseUploadState {
+	state: ComponentState;
+	actions: {
+		setStage: (stage: ComponentStage) => void;
+		setDialogOpen: (open: boolean) => void;
+		setChoice: (choice: DestinationChoice | undefined) => void;
+		setPendingFiles: (files: File[]) => void;
+		setUploadedItemIds: (ids: number[]) => void;
+		setError: (error: string | null) => void;
+		setLoading: (loading: boolean, message?: string) => void;
+		reset: () => void;
+	};
+}
+
+export interface ComponentCallbacks {
+	onFilesPicked?: (files: File[]) => void;
+	onUploadStart?: (files: File[]) => void;
+	onUploadProgress?: (progress: any[]) => void;
+	onUploadComplete?: (result: UploadBatchResult) => void;
+	onEditingStart?: (itemIds: number[]) => void;
+	onEditingComplete?: () => void;
+	onError?: (error: SPFormError) => void;
+}
+
+export interface SPFormError {
+	message: string;
+	code?: string;
+	context?: any;
+	originalError?: any;
+}
+
+export interface ConfigValidationResult {
+	isValid: boolean;
+	errors: string[];
+	warnings: string[];
+}
 
 // Action types for reducer
 type StateAction =

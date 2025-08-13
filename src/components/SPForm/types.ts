@@ -1,4 +1,4 @@
-// src/webparts/UploadAndEdit/types.ts
+// src/components/SPForm/types.ts - Updated with missing types
 
 // ---------- Shared enums / literals ----------
 export type RenderMode = 'modal' | 'samepage' | 'newtab';
@@ -15,6 +15,9 @@ export type UploadSelectionScope = 'single' | 'multiple';
 export type LauncherEventMode = RenderMode;
 
 export type WebPartStage = 'idle' | 'destination' | 'uploading' | 'editing';
+
+// Add ComponentStage type (used by hooks)
+export type ComponentStage = 'idle' | 'destination' | 'upload' | 'editing';
 
 // ---------- Web part configuration (Property Pane) ----------
 
@@ -97,7 +100,7 @@ export interface DestinationChoice {
 /** A single file queued for upload (pre-flight) */
 export interface PendingFile {
 	file: File;
-	/** Optional server name override (e.g., if you apply “(1)” suffix) */
+	/** Optional server name override (e.g., if you apply "(1)" suffix) */
 	targetFileName?: string;
 }
 
@@ -126,6 +129,61 @@ export interface UploadBatchResult {
 	itemIds: number[];
 	failed: Array<{ name: string; message: string }>;
 	skipped?: string[];
+}
+
+// ---------- Hook-related types ----------
+
+/** Component state for hooks */
+export interface ComponentState {
+	stage: ComponentStage;
+	dialogOpen: boolean;
+	choice?: DestinationChoice;
+	pendingFiles: File[];
+	uploadedItemIds: number[];
+	errorMsg: string | null;
+	isLoading: boolean;
+	loadingMessage?: string;
+}
+
+/** Hook return type for useUploadState */
+export interface UseUploadState {
+	state: ComponentState;
+	actions: {
+		setStage: (stage: ComponentStage) => void;
+		setDialogOpen: (open: boolean) => void;
+		setChoice: (choice: DestinationChoice | undefined) => void;
+		setPendingFiles: (files: File[]) => void;
+		setUploadedItemIds: (ids: number[]) => void;
+		setError: (error: string | null) => void;
+		setLoading: (loading: boolean, message?: string) => void;
+		reset: () => void;
+	};
+}
+
+/** Component callbacks for hooks */
+export interface ComponentCallbacks {
+	onFilesPicked?: (files: File[]) => void;
+	onUploadStart?: (files: File[]) => void;
+	onUploadProgress?: (progress: FileProgress[]) => void;
+	onUploadComplete?: (result: UploadBatchResult) => void;
+	onEditingStart?: (itemIds: number[]) => void;
+	onEditingComplete?: () => void;
+	onError?: (error: SPFormError) => void;
+}
+
+/** Error handling interface */
+export interface SPFormError {
+	message: string;
+	code?: string;
+	context?: any;
+	originalError?: any;
+}
+
+/** Configuration validation result */
+export interface ConfigValidationResult {
+	isValid: boolean;
+	errors: string[];
+	warnings: string[];
 }
 
 // ---------- Services contracts ----------
