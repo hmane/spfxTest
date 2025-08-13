@@ -65,6 +65,7 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 					ToastHost,
 					null,
 					React.createElement(UploadAndEditApp, {
+
 						siteUrl: this.context.pageContext.web.absoluteUrl,
 						spfxContext: this.context,
 

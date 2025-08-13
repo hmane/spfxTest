@@ -1,61 +1,49 @@
+// components/UploadZone.tsx
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-	DefaultButton,
-	Link,
+	Stack,
+	Text,
+	ProgressIndicator,
 	MessageBar,
 	MessageBarType,
 	PrimaryButton,
-	ProgressIndicator,
-	Stack,
-	Text,
+	DefaultButton,
+	Link,
+	Icon,
 } from '@fluentui/react';
-import * as React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DestinationChoice, OverwritePolicy, SharePointService, UploadBatchResult } from '../types';
-import { debounce } from '../utils';
-type OneResult =
-	| { status: 'done'; itemId: number }
-	| { status: 'skipped' }
-	| { status: 'error'; errorMessage: string };
+import {
+	DestinationChoice,
+	SharePointService,
+	OverwritePolicy,
+	UploadBatchResult,
+	FileProgress,
+	FileUploadState,
+} from '../types';
+
 export interface UploadZoneProps {
-	destination: DestinationChoice; // may include libraryTitle/contentTypeName/folderPath
+	destination: DestinationChoice;
 	spService: SharePointService;
 	allowMultiple?: boolean;
 	overwritePolicy?: OverwritePolicy;
 	initialFiles?: File[];
+	maxConcurrentUploads?: number;
 
 	onBatchComplete?: (result: UploadBatchResult) => void;
 	onBatchCanceled?: () => void;
+	onProgress?: (progress: FileProgress[]) => void;
 
-	/** Optional: if overwrite policy is "overwrite", ask user first */
 	confirmOverwrite?: (fileName: string) => Promise<boolean>;
 
 	title?: string;
 	hint?: string;
 	cancelButtonLabel?: string;
-
-	/** Start uploading immediately when mounted */
-	autoStart?: boolean; // default: true
-
-	/**
-	 * NEW: If false, do NOT call onBatchComplete automatically.
-	 * Keep the UploadZone visible so users can retry failed items, then
-	 * call onRequestProceed() when you want to move on.
-	 */
-	launchEditorOnComplete?: boolean; // default: true
-	onRequestProceed?: (result: UploadBatchResult) => void;
+	autoStart?: boolean;
 }
 
-type RowStatus = 'queued' | 'starting' | 'uploading' | 'done' | 'error' | 'skipped';
-
-type FileRow = {
-	file: File;
-	targetFileName?: string;
-	percent: number;
-	status: RowStatus;
-	errorMessage?: string;
-	itemId?: number;
-	attempts: number;
-};
+type OneResult =
+	| { status: 'done'; itemId: number }
+	| { status: 'skipped' }
+	| { status: 'error'; errorMessage: string };
 
 export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 	const {
@@ -64,247 +52,276 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		allowMultiple = true,
 		overwritePolicy = 'suffix',
 		initialFiles = [],
+		maxConcurrentUploads = 3,
 		onBatchComplete,
 		onBatchCanceled,
+		onProgress,
 		confirmOverwrite,
-		title,
+		title = 'Uploading files...',
 		hint,
 		cancelButtonLabel = 'Cancel',
 		autoStart = true,
-		launchEditorOnComplete = true,
-		onRequestProceed,
 	} = props;
 
-	const [rows, setRows] = useState<FileRow[]>(() =>
-		initialFiles.map((f) => ({ file: f, percent: 0, status: 'queued', attempts: 0 }))
-	);
-	const [uploading, setUploading] = useState(false);
-	const [canceled, setCanceled] = useState(false);
+	const [files, setFiles] = useState<FileUploadState[]>([]);
+	const [isUploading, setIsUploading] = useState(false);
+	const [isCanceled, setIsCanceled] = useState(false);
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-	// refresh when new files come in
+	const activeUploadsRef = useRef<Set<string>>(new Set());
+	const isMountedRef = useRef(true);
+	const startingRef = useRef<boolean>(false); // prevent double start
+
 	useEffect(() => {
-		setRows(initialFiles.map((f) => ({ file: f, percent: 0, status: 'queued', attempts: 0 })));
-		setUploading(false);
-		setCanceled(false);
+		const next: FileUploadState[] = initialFiles.map((file) => ({
+			file,
+			fileName: file.name,
+			percent: 0,
+			status: 'queued',
+			attempts: 0,
+		}));
+		setFiles(next);
+		setIsUploading(false);
+		setIsCanceled(false);
 		setErrorMsg(null);
+		startingRef.current = false;
 	}, [initialFiles]);
 
-	// helper: compute batch summary
-	const summary = useMemo(() => {
-		const itemIds = rows
-			.filter((r) => r.status === 'done' && typeof r.itemId === 'number')
-			.map((r) => r.itemId!) as number[];
-		const failed = rows
-			.filter((r) => r.status === 'error')
-			.map((r) => ({ name: r.file.name, message: r.errorMessage || 'Failed' }));
-		const skipped = rows.filter((r) => r.status === 'skipped').map((r) => r.file.name);
-		return { itemIds, failed, skipped };
-	}, [rows]);
+	useEffect(() => {
+		return () => {
+			isMountedRef.current = false;
+			activeUploadsRef.current.clear();
+		};
+	}, []);
 
-	const resetAndCancel = () => {
-		setUploading(false);
-		setCanceled(true);
-		onBatchCanceled?.();
-	};
+	const overallProgress = useMemo(() => {
+		if (files.length === 0) return 0;
+		const nonSkipped = files.filter((f) => f.status !== 'skipped');
+		if (!nonSkipped.length) return 100;
+		const total = nonSkipped.reduce((sum, f) => sum + (isFinite(f.percent) ? f.percent : 0), 0);
+		return Math.round(total / nonSkipped.length);
+	}, [files]);
 
-	// add a return type for one-file attempt
+	const updateFileState = useCallback((index: number, updates: Partial<FileUploadState>) => {
+		if (!isMountedRef.current) return;
+		setFiles((prev) => {
+			const arr = [...prev];
+			if (arr[index]) arr[index] = { ...arr[index], ...updates };
+			return arr;
+		});
+	}, []);
 
-	// CHANGE uploadOne: return OneResult instead of void
 	const uploadOne = useCallback(
 		async (index: number): Promise<OneResult> => {
-			const row = rows[index];
-			if (!row) return { status: 'skipped' };
+			const snapshot = files[index];
+			if (!snapshot || isCanceled || !isMountedRef.current) return { status: 'skipped' };
 
-			// mark starting
-			setRows((prev) => {
-				const n = [...prev];
-				n[index] = { ...n[index], status: 'starting', percent: 0, errorMessage: undefined };
-				return n;
-			});
+			const fileId = `${index}-${snapshot.file.name}`;
+			activeUploadsRef.current.add(fileId);
 
-			// existence preflight (unchanged logic)
-			try {
-				const exists = await spService.fileExists(
-					destination.libraryUrl,
-					destination.folderPath,
-					row.file.name
-				);
-				if (exists) {
-					if (overwritePolicy === 'skip') {
-						setRows((prev) => {
-							const n = [...prev];
-							n[index] = {
-								...n[index],
-								status: 'skipped',
-								errorMessage: 'Already exists (skipped)',
-								percent: 0,
-							};
-							return n;
-						});
-						return { status: 'skipped' };
-					}
-					if (overwritePolicy === 'overwrite' && confirmOverwrite) {
-						const ok = await confirmOverwrite(row.file.name);
-						if (!ok) {
-							setRows((prev) => {
-								const n = [...prev];
-								n[index] = {
-									...n[index],
-									status: 'skipped',
-									errorMessage: 'User chose not to overwrite',
-									percent: 0,
-								};
-								return n;
-							});
-							return { status: 'skipped' };
-						}
-					}
-					// suffix handled in service
+			// show an indeterminate “Starting…” until the first progress tick
+			updateFileState(index, { status: 'starting', percent: 0, errorMessage: undefined });
+
+			// throttle progress updates to ~10fps
+			let last = 0;
+			const onProgressUpdate = (percent: number) => {
+				const now = Date.now();
+				if (now - last > 100) {
+					last = now;
+					updateFileState(index, {
+						status: percent >= 0 && percent < 100 ? 'uploading' : 'uploading',
+						percent: Math.max(0, Math.min(100, percent)),
+					});
 				}
-			} catch {
-				// ignore and proceed
-			}
-
-			const updatePct = debounce((pct: number) => {
-				setRows((prev) => {
-					const n = [...prev];
-					if (!n[index]) return n;
-					n[index] = {
-						...n[index],
-						status: pct >= 0 && pct < 100 ? 'uploading' : n[index].status,
-						percent: Math.max(0, Math.min(100, pct)),
-					};
-					return n;
-				});
-			}, 50);
+			};
 
 			try {
 				const { itemId } = await spService.uploadFileWithProgress(
 					destination.libraryUrl,
 					destination.folderPath,
-					row.file,
-					updatePct,
+					snapshot.file,
+					onProgressUpdate,
 					overwritePolicy,
-					2 * 1024 * 1024, // 2MB chunk for earlier callbacks
-					overwritePolicy === 'overwrite' ? confirmOverwrite : undefined
+					2 * 1024 * 1024, // 2MB chunks => earlier callbacks
+					confirmOverwrite,
+					destination.contentTypeId // 👈 set CT immediately per-file
 				);
 
-				setRows((prev) => {
-					const n = [...prev];
-					n[index] = {
-						...n[index],
-						status: 'done',
-						percent: 100,
-						itemId,
-						attempts: row.attempts + 1,
-					};
-					return n;
+				if (!isMountedRef.current) return { status: 'skipped' };
+
+				updateFileState(index, {
+					status: 'done',
+					percent: 100,
+					itemId,
+					attempts: snapshot.attempts + 1,
 				});
 				return { status: 'done', itemId };
 			} catch (e: any) {
+				if (!isMountedRef.current) return { status: 'skipped' };
+
+				// Prefer our service’s skip flag if present
+				const isSkip =
+					e && (e.__skip__ === true || /already exists|policy=skip/i.test(e.message || ''));
+				if (isSkip) {
+					updateFileState(index, {
+						status: 'skipped',
+						errorMessage: 'Skipped',
+						attempts: snapshot.attempts + 1,
+						percent: 0,
+					});
+					return { status: 'skipped' };
+				}
+
 				const message = (e && (e.message || e.toString())) || 'Upload failed';
-				setRows((prev) => {
-					const n = [...prev];
-					n[index] = {
-						...n[index],
-						status: 'error',
-						errorMessage: message,
-						attempts: row.attempts + 1,
-					};
-					return n;
+				updateFileState(index, {
+					status: 'error',
+					errorMessage: message,
+					attempts: snapshot.attempts + 1,
 				});
 				return { status: 'error', errorMessage: message };
+			} finally {
+				activeUploadsRef.current.delete(fileId);
 			}
-			// eslint-disable-next-line react-hooks/exhaustive-deps
 		},
 		[
-			rows,
+			files,
+			isCanceled,
 			destination.libraryUrl,
 			destination.folderPath,
 			destination.contentTypeId,
 			overwritePolicy,
 			confirmOverwrite,
 			spService,
+			updateFileState,
 		]
 	);
 
-	// CHANGE startUpload: collect results locally and pass them up
+	const retryUpload = useCallback(
+		async (index: number) => {
+			if (isUploading || isCanceled) return;
+			updateFileState(index, { status: 'queued', errorMessage: undefined, percent: 0 });
+			await uploadOne(index);
+		},
+		[isUploading, isCanceled, updateFileState, uploadOne]
+	);
+
 	const startUpload = useCallback(async () => {
-		if (!rows.length) return;
-		setUploading(true);
-		setCanceled(false);
+		if (files.length === 0 || isUploading || startingRef.current) return;
+		startingRef.current = true;
+
+		setIsUploading(true);
+		setIsCanceled(false);
 		setErrorMsg(null);
 
+		// local result accumulator (don’t rely on React state timing)
 		const itemIds: number[] = [];
 		const failed: Array<{ name: string; message: string }> = [];
 		const skipped: string[] = [];
 
-		for (let i = 0; i < rows.length; i++) {
-			if (canceled) break;
-			const st = rows[i].status;
-			if (st === 'queued' || st === 'starting' || st === 'error') {
-				// eslint-disable-next-line no-await-in-loop
-				const res = await uploadOne(i);
-				if (res.status === 'done') {
-					itemIds.push(res.itemId);
-				} else if (res.status === 'error') {
-					failed.push({ name: rows[i].file.name, message: res.errorMessage });
-				} else {
-					skipped.push(rows[i].file.name);
+		try {
+			const targets = files
+				.map((f, i) => ({ f, i }))
+				.filter(({ f }) => f.status === 'queued' || f.status === 'error');
+
+			let inFlight = 0;
+			let cursor = 0;
+
+			const launchNext = async (): Promise<void> => {
+				if (isCanceled || !isMountedRef.current) return;
+				if (cursor >= targets.length) return;
+
+				const idx = targets[cursor++].i;
+				inFlight++;
+
+				const res = await uploadOne(idx);
+				if (res.status === 'done') itemIds.push(res.itemId);
+				else if (res.status === 'error')
+					failed.push({ name: files[idx].file.name, message: res.errorMessage });
+				else skipped.push(files[idx].file.name);
+
+				inFlight--;
+				if (cursor < targets.length) await launchNext();
+			};
+
+			const starters = Math.min(maxConcurrentUploads, targets.length);
+			const runners: Promise<void>[] = [];
+			for (let s = 0; s < starters; s++) runners.push(launchNext());
+			await Promise.all(runners);
+		} catch (e: any) {
+			if (isMountedRef.current) setErrorMsg(e?.message || 'Batch upload failed');
+		} finally {
+			if (isMountedRef.current) {
+				setIsUploading(false);
+				startingRef.current = false;
+
+				if (!isCanceled && onBatchComplete) {
+					const result: UploadBatchResult = { itemIds, failed, skipped };
+					onBatchComplete(result);
 				}
 			}
 		}
+	}, [files, isUploading, isCanceled, maxConcurrentUploads, uploadOne, onBatchComplete]);
 
-		setUploading(false);
-		if (canceled) return;
+	const cancelUpload = useCallback(() => {
+		setIsCanceled(true);
+		setIsUploading(false);
+		activeUploadsRef.current.clear();
+		onBatchCanceled?.();
+	}, [onBatchCanceled]);
 
-		const final = { itemIds, failed, skipped };
-
-		if (launchEditorOnComplete) {
-			onBatchComplete?.(final);
-		} else {
-			onRequestProceed?.(final);
-		}
-	}, [rows, canceled, uploadOne, launchEditorOnComplete, onBatchComplete, onRequestProceed]);
-
-	// auto-start uploads when mounted / when rows change from picker
-	const didAutoStartRef = useRef(false);
 	useEffect(() => {
-		if (!autoStart) return;
-		if (rows.length > 0 && !uploading && !didAutoStartRef.current) {
-			didAutoStartRef.current = true;
-			startUpload();
+		if (autoStart && files.length > 0 && !isUploading && !isCanceled) {
+			const hasQueued = files.some((f) => f.status === 'queued');
+			if (hasQueued) startUpload();
 		}
-		if (rows.length === 0) {
-			didAutoStartRef.current = false;
+	}, [autoStart, files, isUploading, isCanceled, startUpload]);
+
+	useEffect(() => {
+		if (!onProgress) return;
+		const progress: FileProgress[] = files.map((f) => ({
+			fileName: f.fileName,
+			percent: f.percent,
+			status: f.status,
+			errorMessage: f.errorMessage,
+			itemId: f.itemId,
+		}));
+		onProgress(progress);
+	}, [files, onProgress]);
+
+	const getStatusIcon = (status: FileProgress['status']) => {
+		switch (status) {
+			case 'done':
+				return <Icon iconName="CheckMark" style={{ color: '#107c10' }} />;
+			case 'error':
+				return <Icon iconName="ErrorBadge" style={{ color: '#d13438' }} />;
+			case 'skipped':
+				return <Icon iconName="Info" style={{ color: '#ffb900' }} />;
+			case 'uploading':
+			case 'starting':
+				return <Icon iconName="Upload" style={{ color: '#0078d4' }} />;
+			default:
+				return <Icon iconName="Clock" style={{ color: '#605e5c' }} />;
 		}
-	}, [rows, autoStart, uploading, startUpload]);
+	};
 
-	// overall percent (only for files that are not skipped)
-	const overallPct = useMemo(() => {
-		const count = rows.filter((r) => r.status !== 'skipped').length;
-		if (!count) return 0;
-		const sum = rows
-			.filter((r) => r.status !== 'skipped')
-			.reduce((acc, r) => acc + (isFinite(r.percent) ? r.percent : 0), 0);
-		return Math.round(sum / count);
-	}, [rows]);
+	const formatFileSize = (bytes: number): string => {
+		if (bytes === 0) return '0 Bytes';
+		const k = 1024;
+		const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+		const i = Math.floor(Math.log(bytes) / Math.log(k));
+		return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+	};
 
-	const anyFailed = rows.some((r) => r.status === 'error');
-	const anyDone = rows.some((r) => r.status === 'done');
-
-	// ---- UI ----
 	return (
-		<Stack tokens={{ childrenGap: 12 }}>
+		<Stack tokens={{ childrenGap: 16 }}>
 			{/* Destination header */}
 			<Stack
 				styles={{
 					root: {
+						padding: 16,
+						backgroundColor: '#f8f9fa',
+						borderRadius: 8,
 						border: '1px solid #edebe9',
-						borderRadius: 10,
-						padding: 12,
-						background: '#faf9f8',
 					},
 				}}
 			>
@@ -313,48 +330,67 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 				</Text>
 				{destination.contentTypeName && (
 					<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
-						Content type:&nbsp;
-						<span style={{ fontWeight: 600 }}>{destination.contentTypeName}</span>
+						Content type: <strong>{destination.contentTypeName}</strong>
 					</Text>
 				)}
 				{destination.folderPath && (
 					<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
-						Folder:&nbsp;<span style={{ fontWeight: 600 }}>{destination.folderPath}</span>
+						Folder: <strong>{destination.folderPath}</strong>
 					</Text>
 				)}
 			</Stack>
 
-			<Text variant="large">{title || 'Uploading…'}</Text>
-			{hint && (
-				<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
-					{hint}
+			{/* Header */}
+			<Stack tokens={{ childrenGap: 8 }}>
+				<Text variant="large" styles={{ root: { fontWeight: 600 } }}>
+					{title}
 				</Text>
-			)}
+				{hint && (
+					<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
+						{hint}
+					</Text>
+				)}
+			</Stack>
 
+			{/* Error message */}
 			{errorMsg && (
 				<MessageBar messageBarType={MessageBarType.error} onDismiss={() => setErrorMsg(null)}>
 					{errorMsg}
 				</MessageBar>
 			)}
 
-			{/* Overall progress (ignore skipped) */}
-			{rows.length > 0 && (
-				<ProgressIndicator
-					label={`Uploading ${rows.length} file${rows.length > 1 ? 's' : ''}`}
-					percentComplete={overallPct / 100}
-				/>
+			{/* Overall progress */}
+			{files.length > 0 && (
+				<Stack tokens={{ childrenGap: 8 }}>
+					<Text variant="medium">
+						Uploading {files.length} file{files.length > 1 ? 's' : ''}
+					</Text>
+					<ProgressIndicator
+						percentComplete={overallProgress / 100}
+						description={`${overallProgress}% complete`}
+					/>
+				</Stack>
 			)}
 
 			{/* Per-file rows */}
-			<Stack tokens={{ childrenGap: 8 }}>
-				{rows.map((r, idx) => (
-					<Stack key={`${r.file.name}-${idx}`} tokens={{ childrenGap: 4 }}>
-						<Stack horizontal horizontalAlign="space-between">
-							<Text>{r.file.name}</Text>
-							{r.status === 'error' && (
+			<Stack tokens={{ childrenGap: 12 }}>
+				{files.map((f, index) => (
+					<Stack key={`${f.file.name}-${index}`} tokens={{ childrenGap: 4 }}>
+						<Stack horizontal horizontalAlign="space-between" verticalAlign="center">
+							<Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
+								{getStatusIcon(f.status)}
+								<Stack>
+									<Text styles={{ root: { fontWeight: 500 } }}>{f.file.name}</Text>
+									<Text variant="small" styles={{ root: { color: '#605e5c' } }}>
+										{formatFileSize(f.file.size)}
+									</Text>
+								</Stack>
+							</Stack>
+
+							{f.status === 'error' && (
 								<Link
-									onClick={() => uploadOne(idx)}
-									disabled={uploading}
+									onClick={() => retryUpload(index)}
+									disabled={isUploading}
 									styles={{ root: { fontWeight: 600 } }}
 								>
 									Retry
@@ -364,38 +400,38 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 
 						<ProgressIndicator
 							percentComplete={
-								r.status === 'starting'
-									? undefined // indeterminate while first chunk is getting underway
-									: (r.percent || 0) / 100
+								f.status === 'starting' ? undefined : (isFinite(f.percent) ? f.percent : 0) / 100
 							}
 							description={
-								r.status === 'error'
-									? r.errorMessage || 'Failed'
-									: r.status === 'done'
+								f.status === 'error'
+									? f.errorMessage || 'Failed'
+									: f.status === 'done'
 									? 'Completed'
-									: r.status === 'skipped'
+									: f.status === 'skipped'
 									? 'Skipped'
-									: r.status === 'starting'
+									: f.status === 'starting'
 									? 'Starting…'
-									: `${r.percent}%`
+									: `${f.percent}%`
 							}
 						/>
 					</Stack>
 				))}
 			</Stack>
 
+			{/* Actions */}
 			<Stack horizontal horizontalAlign="end" tokens={{ childrenGap: 8 }}>
-				{!launchEditorOnComplete && (
+				{!autoStart && (
 					<PrimaryButton
-						text={anyDone ? 'Continue to properties' : 'Skip'}
-						onClick={() => onRequestProceed?.(summary)}
-						disabled={!anyDone && !anyFailed}
+						text="Start Upload"
+						onClick={startUpload}
+						disabled={isUploading || files.length === 0}
+						iconProps={{ iconName: 'Upload' }}
 					/>
 				)}
 				<DefaultButton
 					text={cancelButtonLabel}
-					onClick={resetAndCancel}
-					disabled={uploading && rows.length === 0}
+					onClick={cancelUpload}
+					disabled={!isUploading && files.length === 0}
 				/>
 			</Stack>
 		</Stack>

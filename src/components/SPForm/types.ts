@@ -1,7 +1,6 @@
 // src/webparts/UploadAndEdit/types.ts
 
 // ---------- Shared enums / literals ----------
-
 export type RenderMode = 'modal' | 'samepage' | 'newtab';
 
 export type PickerMode =
@@ -95,44 +94,57 @@ export interface DestinationChoice {
 	contentTypeName?: string;
 }
 
-/** A single file queued for upload */
+/** A single file queued for upload (pre-flight) */
 export interface PendingFile {
 	file: File;
 	/** Optional server name override (e.g., if you apply “(1)” suffix) */
 	targetFileName?: string;
 }
 
-/** Per-file progress state */
+/** Per-file progress state (UI) */
 export interface FileProgress {
-	name: string;
+	fileName: string;
 	percent: number; // 0..100
-	status: 'queued' | 'uploading' | 'done' | 'error' | 'canceled';
+	status: 'queued' | 'starting' | 'uploading' | 'done' | 'error' | 'skipped';
 	errorMessage?: string;
 	itemId?: number; // set when finished
 }
 
-/** Batch upload outcome */
+/** Internal per-row state for UploadZone */
+export interface FileUploadState {
+	file: File;
+	fileName: string;
+	percent: number; // 0..100
+	status: 'queued' | 'starting' | 'uploading' | 'done' | 'error' | 'skipped';
+	errorMessage?: string;
+	itemId?: number;
+	attempts: number;
+}
+
+/** Batch upload outcome (emitted to parent) */
 export interface UploadBatchResult {
 	itemIds: number[];
 	failed: Array<{ name: string; message: string }>;
-	skipped?: string[]; // NEW
+	skipped?: string[];
 }
-
 
 // ---------- Services contracts ----------
 
 export interface SharePointService {
 	getLibraryContentTypes(libraryUrl: string): Promise<ContentTypeInfo[]>;
 	getLibraryTitle(libraryUrl: string): Promise<string>;
+
 	uploadFileWithProgress(
-		libraryServerRelativeUrl: string,
+		libraryUrl: string,
 		folderPath: string | undefined,
 		file: File,
-		onPct: (pct: number) => void,
+		onProgress: (pct: number) => void,
 		overwritePolicy: OverwritePolicy,
 		chunkSizeBytes?: number,
 		confirmOverwrite?: (fileName: string) => Promise<boolean>,
+		contentTypeId?: string
 	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }>;
+
 	setItemContentType(libraryUrl: string, itemId: number, contentTypeId: string): Promise<void>;
 
 	fileExists(

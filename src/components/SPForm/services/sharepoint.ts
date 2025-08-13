@@ -1,35 +1,39 @@
-// PnPjs features (extend SPFI surface)
-import { SPFI } from '@pnp/sp';
-import '@pnp/sp/content-types/list';
-import '@pnp/sp/files';
-import type { IFileUploadProgressData } from '@pnp/sp/files';
-import '@pnp/sp/folders';
-import '@pnp/sp/items';
-import '@pnp/sp/lists';
+// src/webparts/UploadAndEdit/services/sharepoint.ts
+// PnPjs v4.16-friendly SharePoint service with:
+// - chunked upload + progress
+// - per-call existence cache
+// - optional overwrite confirm
+// - optional immediate ContentType set
+// - robust item resolution via file UniqueId
+
+import { SPFI, spfi } from '@pnp/sp';
+import { SPFx as PnP_SPFX } from '@pnp/sp';
 import '@pnp/sp/webs';
-import { Context } from '../../context/pnpjs-config';
+import '@pnp/sp/lists';
+import '@pnp/sp/items';
+import '@pnp/sp/folders';
+import '@pnp/sp/files';
+import '@pnp/sp/content-types/list';
+import type { IFileUploadProgressData } from '@pnp/sp/files';
 
 export type OverwritePolicy = 'overwrite' | 'skip' | 'suffix';
 
-export type ContentTypeLite = {
-	id: string; // StringId
-	name: string; // Name
-};
+export interface ContentTypeLite {
+	id: string;
+	name: string;
+	description?: string;
+	hidden?: boolean;
+}
 
 export interface SharePointService {
 	getLibraryTitle(libraryUrl: string): Promise<string>;
-	/** Check if a file exists in (library + optional subfolder) */
+
 	fileExists(
 		libraryServerRelativeUrl: string,
 		folderPath: string | undefined,
 		fileName: string
 	): Promise<boolean>;
 
-	/**
-	 * Upload a file with progress + overwrite policy handling.
-	 * - Uses chunked upload under the hood
-	 * - Returns created list item id (resolved via file GUID)
-	 */
 	uploadFileWithProgress(
 		libraryServerRelativeUrl: string,
 		folderPath: string | undefined,
@@ -37,41 +41,49 @@ export interface SharePointService {
 		onPct: (pct: number) => void,
 		overwritePolicy: OverwritePolicy,
 		chunkSizeBytes?: number,
-		confirmOverwrite?: (fileName: string) => Promise<boolean>
+		confirmOverwrite?: (fileName: string) => Promise<boolean>,
+		contentTypeId?: string // 👈 set CT immediately after upload (optional)
 	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }>;
 
-	/** Force an item’s content type */
 	setItemContentType(
 		libraryServerRelativeUrl: string,
 		itemId: number,
 		contentTypeId: string
 	): Promise<void>;
 
-	/** Get content types available for a library (optionally filtered) */
 	getLibraryContentTypes(libraryServerRelativeUrl: string): Promise<ContentTypeLite[]>;
 }
 
-export function createSharePointService(): SharePointService {
-	const sp = Context.getContext().sp;
+// Factory: pass SPFx context (no need to pass siteUrl explicitly)
+export function createSharePointService(context: any): SharePointService {
+	if (!context) throw new Error('SPFx context is required to create SharePoint service');
+	const sp = spfi().using(PnP_SPFX(context));
 	return new PnpSharePointService(sp);
 }
 
-/* --------------------------------- Impl --------------------------------- */
-
 class PnpSharePointService implements SharePointService {
-	constructor(private readonly sp: SPFI) {}
+	constructor(private readonly sp: SPFI) {
+		if (!sp) throw new Error('SP instance is required');
+	}
 
-	/**
-	 * Fast existence check: HEAD-like request by selecting UniqueId.
-	 * Uses a tiny per-call cache by (folderUrl|name) to avoid duplicates in a batch.
-	 */
+	public async getLibraryTitle(libraryUrl: string): Promise<string> {
+		try {
+			const list = await this.sp.web.getList(libraryUrl).select('Title')();
+			return list?.Title || libraryUrl.split('/').pop() || 'Library';
+		} catch (e) {
+			// eslint-disable-next-line no-console
+			console.warn(`getLibraryTitle failed for ${libraryUrl}`, e);
+			return libraryUrl.split('/').pop() || 'Library';
+		}
+	}
+
 	public async fileExists(
 		libraryServerRelativeUrl: string,
 		folderPath: string | undefined,
 		fileName: string
 	): Promise<boolean> {
-		const folderUrl = normalizeFolderUrl(libraryServerRelativeUrl, folderPath);
 		try {
+			const folderUrl = normalizeFolderUrl(libraryServerRelativeUrl, folderPath);
 			await this.sp.web
 				.getFolderByServerRelativePath(folderUrl)
 				.files.getByUrl(fileName)
@@ -82,65 +94,42 @@ class PnpSharePointService implements SharePointService {
 		}
 	}
 
-	public async getLibraryTitle(libraryUrl: string): Promise<string> {
-		const library = await this.sp.web.getList(libraryUrl).select('Title')();
-		return library.Title;
-	}
-
 	public async uploadFileWithProgress(
 		libraryServerRelativeUrl: string,
 		folderPath: string | undefined,
 		file: File,
 		onPct: (pct: number) => void,
 		overwritePolicy: OverwritePolicy,
-		chunkSizeBytes?: number,
-		confirmOverwrite?: (fileName: string) => Promise<boolean>
+		chunkSizeBytes: number = 2 * 1024 * 1024, // smaller chunk => earlier callbacks
+		confirmOverwrite?: (fileName: string) => Promise<boolean>,
+		contentTypeId?: string
 	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }> {
-		// ---- resolve folder once & set up per-call caches ----
+		// Resolve folder once; set up per-call existence cache to avoid repeated HEADs
 		const folderUrl = normalizeFolderUrl(libraryServerRelativeUrl, folderPath);
 		const folderApi = this.sp.web.getFolderByServerRelativePath(folderUrl);
-
-		// per-call existence cache to avoid re-checking the same file multiple times
 		const existsCache = new Map<string, boolean>();
 		const cachedExists = async (name: string): Promise<boolean> => {
 			const key = `${folderUrl}|${name}`;
 			if (existsCache.has(key)) return existsCache.get(key)!;
-			const yes = await this.fileExists(libraryServerRelativeUrl, folderPath, name);
-			existsCache.set(key, yes);
-			return yes;
+			try {
+				await folderApi.files.getByUrl(name).select('UniqueId')();
+				existsCache.set(key, true);
+				return true;
+			} catch {
+				existsCache.set(key, false);
+				return false;
+			}
 		};
 
-		// ---- compute target server file name based on policy ----
-		let serverFileName = file.name;
+		// Compute final server name per policy (using cachedExists)
+		const serverFileName = await this.resolveFileNameWithCache(
+			file.name,
+			overwritePolicy,
+			cachedExists,
+			confirmOverwrite
+		);
 
-		if (overwritePolicy === 'suffix') {
-			const { name, ext } = splitNameAndExt(serverFileName);
-			let i = 0;
-			while (await cachedExists(serverFileName)) {
-				i++;
-				serverFileName = `${name} (${i})${ext}`;
-				if (i > 100) break; // safety
-			}
-		} else if (overwritePolicy === 'skip') {
-			if (await cachedExists(serverFileName)) {
-				// Return a typed error that caller can interpret as "skipped"
-				const err: any = new Error(`File "${serverFileName}" already exists (policy=skip).`);
-				err.__skip__ = true;
-				throw err;
-			}
-		} else if (overwritePolicy === 'overwrite') {
-			if ((await cachedExists(serverFileName)) && confirmOverwrite) {
-				const ok = await confirmOverwrite(serverFileName);
-				if (!ok) {
-					const err: any = new Error(`User canceled overwrite for "${serverFileName}".`);
-					err.__skip__ = true;
-					throw err;
-				}
-			}
-		}
-
-		// ---- upload (chunked) with **progress** ----
-		// v4.16 option: use "overWrite" (not "Overwrite")
+		// Upload (v4.16): progress via IFileUploadProgressData; option is overWrite
 		const addRes: any = await folderApi.files.addChunked(serverFileName, file, {
 			progress: (data: IFileUploadProgressData) => {
 				if (typeof data?.offset === 'number' && file.size > 0) {
@@ -148,41 +137,31 @@ class PnpSharePointService implements SharePointService {
 					onPct(pct);
 				}
 			},
-			overWrite: overwritePolicy === 'overwrite',
-			...(chunkSizeBytes ? ({ chunkSize: chunkSizeBytes } as any) : null),
+			Overwrite: overwritePolicy === 'overwrite',
+			...(chunkSizeBytes ? { chunkSize: chunkSizeBytes } : {}),
 		});
 
-		// ---- get fresh metadata; v4.16 may return metadata directly or under .file ----
-		let uniqueId: string | undefined;
-		let serverRelativeUrl: string | undefined;
+		// Extract UniqueId/ServerRelativeUrl (return shape varies)
+		const { uniqueId, serverRelativeUrl } = await this.extractFileMetadata(
+			addRes,
+			folderApi,
+			serverFileName
+		);
 
-		if (addRes?.UniqueId) {
-			uniqueId = addRes.UniqueId as string;
-			serverRelativeUrl = addRes.ServerRelativeUrl as string;
-		} else if (addRes?.file) {
-			const meta = await addRes.file.select('UniqueId', 'ServerRelativeUrl')();
-			uniqueId = meta?.UniqueId as string;
-			serverRelativeUrl = meta?.ServerRelativeUrl as string;
-		} else {
-			// last-resort: resolve by name (can be fooled by recycle bin in rare cases)
-			const meta = await folderApi.files
-				.getByUrl(serverFileName)
-				.select('UniqueId', 'ServerRelativeUrl')();
-			uniqueId = meta?.UniqueId as string;
-			serverRelativeUrl = meta?.ServerRelativeUrl as string;
-		}
-
-		if (!uniqueId || !serverRelativeUrl) {
-			throw new Error('Upload succeeded but could not resolve file metadata.');
-		}
-
-		// ---- map file GUID → list item (robust, avoids deleted/recreated name confusion) ----
+		// Map file GUID → list item (robust against delete/recreate name issues)
 		const item = await this.sp.web.getFileById(uniqueId).getItem();
-		const info = await item.select('Id')();
-		const itemId: number = info?.Id as number;
+		const idSel = await item.select('Id')();
+		const itemId: number = idSel?.Id as number;
+		if (typeof itemId !== 'number')
+			throw new Error('Could not resolve list item ID for uploaded file');
 
-		if (typeof itemId !== 'number') {
-			throw new Error('Could not resolve list item for uploaded file.');
+		// OPTIONAL: set ContentType right away (best effort)
+		if (contentTypeId && contentTypeId.trim()) {
+			try {
+				await this.setItemContentType(libraryServerRelativeUrl, itemId, contentTypeId.trim());
+			} catch {
+				// ignore; form will still open. Worst case user sees CT picker.
+			}
 		}
 
 		return { itemId, serverRelativeUrl, uniqueId };
@@ -194,41 +173,114 @@ class PnpSharePointService implements SharePointService {
 		contentTypeId: string
 	): Promise<void> {
 		const list = this.sp.web.getList(libraryServerRelativeUrl);
-		await list.items.getById(itemId).update({
-			ContentTypeId: contentTypeId,
-		});
+		await list.items.getById(itemId).update({ ContentTypeId: contentTypeId });
 	}
 
 	public async getLibraryContentTypes(
 		libraryServerRelativeUrl: string
 	): Promise<ContentTypeLite[]> {
-		const list: any = await this.sp.web
-			.getList(libraryServerRelativeUrl)
-			.contentTypes.select('StringId', 'Name')();
-		// PnP returns an array-like; normalize to ContentTypeLite[]
-		return (Array.isArray(list) ? list : list?.value || [])
-			.map((ct: any) => ({ id: ct.StringId as string, name: ct.Name as string }))
-			.filter((ct: ContentTypeLite) => !!ct.id && !!ct.name);
+		try {
+			const cts: any = await this.sp.web
+				.getList(libraryServerRelativeUrl)
+				.contentTypes.select('StringId', 'Name', 'Description', 'Hidden')();
+
+			const arr = Array.isArray(cts) ? cts : cts?.value || [];
+			return arr
+				.map((ct: any) => ({
+					id: ct.StringId as string,
+					name: ct.Name as string,
+					description: ct.Description as string | undefined,
+					hidden: Boolean(ct.Hidden),
+				}))
+				.filter((ct: ContentTypeLite) => !!ct.id && !!ct.name);
+		} catch (e) {
+			// eslint-disable-next-line no-console
+			console.error(`getLibraryContentTypes failed for ${libraryServerRelativeUrl}`, e);
+			return [];
+		}
+	}
+
+	/* ------------------------- private helpers ------------------------- */
+
+	/** Resolve final filename based on policy, using a cached exists() */
+	private async resolveFileNameWithCache(
+		originalName: string,
+		policy: OverwritePolicy,
+		exists: (name: string) => Promise<boolean>,
+		confirmOverwrite?: (fileName: string) => Promise<boolean>
+	): Promise<string> {
+		if (policy === 'overwrite') {
+			if (confirmOverwrite && (await exists(originalName))) {
+				const ok = await confirmOverwrite(originalName);
+				if (!ok) {
+					const err: any = new Error(`User canceled overwrite for "${originalName}"`);
+					err.__skip__ = true; // UI can treat as "skipped"
+					throw err;
+				}
+			}
+			return originalName;
+		}
+
+		if (policy === 'skip') {
+			if (await exists(originalName)) {
+				const err: any = new Error(`File "${originalName}" already exists (policy=skip)`);
+				err.__skip__ = true; // UI can treat as "skipped"
+				throw err;
+			}
+			return originalName;
+		}
+
+		// suffix
+		const { name, ext } = splitNameAndExt(originalName);
+		let candidate = originalName;
+		let i = 0;
+		while (await exists(candidate)) {
+			i++;
+			candidate = `${name} (${i})${ext}`;
+			if (i > 200) break; // safety
+		}
+		return candidate;
+	}
+
+	/** Support multiple addChunked return shapes; fall back to name lookup */
+	private async extractFileMetadata(
+		addRes: any,
+		folderApi: any,
+		fileName: string
+	): Promise<{ uniqueId: string; serverRelativeUrl: string }> {
+		if (addRes?.UniqueId && addRes?.ServerRelativeUrl) {
+			return {
+				uniqueId: addRes.UniqueId as string,
+				serverRelativeUrl: addRes.ServerRelativeUrl as string,
+			};
+		}
+		if (addRes?.file) {
+			const meta = await addRes.file.select('UniqueId', 'ServerRelativeUrl')();
+			return {
+				uniqueId: meta?.UniqueId as string,
+				serverRelativeUrl: meta?.ServerRelativeUrl as string,
+			};
+		}
+		// last resort (rare): resolve by name
+		const meta = await folderApi.files.getByUrl(fileName).select('UniqueId', 'ServerRelativeUrl')();
+		return {
+			uniqueId: meta?.UniqueId as string,
+			serverRelativeUrl: meta?.ServerRelativeUrl as string,
+		};
 	}
 }
 
-/* ----------------------------- helpers ----------------------------- */
+/* ----------------------------- utilities ---------------------------- */
 
 function splitNameAndExt(fileName: string): { name: string; ext: string } {
-	const idx = fileName.lastIndexOf('.');
-	if (idx <= 0) return { name: fileName, ext: '' };
-	return { name: fileName.substring(0, idx), ext: fileName.substring(idx) };
+	const i = fileName.lastIndexOf('.');
+	if (i <= 0) return { name: fileName, ext: '' };
+	return { name: fileName.substring(0, i), ext: fileName.substring(i) };
 }
 
 function normalizeFolderUrl(libraryServerRelativeUrl: string, folderPath?: string): string {
 	if (!folderPath) return libraryServerRelativeUrl;
-	// Safe join: "/sites/x/Lib" + "My/Folder" => "/sites/x/Lib/My/Folder"
-	const joined = `${stripTrailingSlash(libraryServerRelativeUrl)}/${stripLeadingSlash(folderPath)}`;
-	return joined.replace(/\/+/g, '/');
-}
-function stripLeadingSlash(s: string) {
-	return s?.startsWith('/') ? s.slice(1) : s;
-}
-function stripTrailingSlash(s: string) {
-	return s?.endsWith('/') ? s.slice(0, -1) : s;
+	const base = libraryServerRelativeUrl.replace(/\/+$/, '');
+	const sub = folderPath.replace(/^\/+/, '');
+	return `${base}/${sub}`.replace(/\/+/g, '/');
 }

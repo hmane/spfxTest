@@ -1,123 +1,204 @@
-// utils/types.ts
-// Shared types for the SPFx Context Hub
+// types.ts - Simplified and enhanced version
 
-import type { LogLevel } from '@pnp/logging';
-import type { ApplicationInsights } from '@microsoft/applicationinsights-web';
-import type { SPFI } from '@pnp/sp';
-import type { GraphFI } from '@pnp/graph';
-import type { WebPartContext } from '@microsoft/sp-webpart-base';
-import type { BaseComponentContext } from '@microsoft/sp-component-base';
-import type { PageContext } from '@microsoft/sp-page-context';
-import type { HttpGateway } from '../net/http';
-import type { LoggerFacade } from '../logging/logging';
-import type { LinksBound } from './links';
+// Core enums with better organization
+export type RenderMode = 'modal' | 'samepage' | 'newtab';
+export type PickerMode = 'libraryFirst' | 'contentTypeFirst' | 'mixed';
+export type OverwritePolicy = 'overwrite' | 'skip' | 'suffix';
+export type UploadSelectionScope = 'single' | 'multiple';
 
-export type CacheTTL = 'none' | 'short' | 'long' | 'pessimistic';
-export type EnvName = 'dev' | 'uat' | 'prod';
-
-export interface ContextOptions {
-	/** Global log verbosity (default: Warning on prod sites, Info elsewhere) */
-	logLevel?: LogLevel;
-	/** Default cache flavor when none is specified (default: "short") */
-	defaultCache?: CacheTTL;
-	/** HTTP timeout for http.sp/aad/flow (default: 45000 ms) */
-	timeoutMs?: number;
-	/** App Insights key; telemetry auto-enables if present unless enableTelemetry=false */
-	appInsightsKey?: string;
-	/** Role name to tag in App Insights (default: "SPFxApp") */
-	aiRoleName?: string;
-	/** Force telemetry on/off. Default: on iff appInsightsKey present; otherwise off */
-	enableTelemetry?: boolean;
-	/** Also log to SPFx Developer Console */
-	enableDiagnosticsSink?: boolean;
-	/** Friendly component name that appears in logs/telemetry */
-	componentName?: string;
+// Simplified library configuration
+export interface LibraryOption {
+	/** Server-relative URL to the library root */
+	serverRelativeUrl: string;
+	/** Friendly display name */
+	label?: string;
+	/** Default subfolder for uploads */
+	defaultFolder?: string;
+	/** Minimal view ID for bulk editing (optional) */
+	minimalViewId?: string;
+	/** Allowed content types - 'all' or array of IDs */
+	allowedContentTypeIds?: string[] | 'all';
 }
 
-export interface HttpGatewayOptions {
-	timeoutMs?: number;
-	retries?: number;
-	correlationId: string;
-	logger?: LoggerFacade;
-	ai?: ApplicationInsights;
-	/** Per-instance concurrency limit (default: 6) */
-	maxConcurrent?: number;
+// Content type information
+export interface ContentTypeInfo {
+	id: string;
+	name: string;
+	description?: string;
+	hidden?: boolean;
 }
 
-export interface HttpResult {
-	ok: boolean;
-	status: number;
+// User selection from pickers
+export interface DestinationChoice {
+	libraryUrl: string;
+	contentTypeId?: string;
+	folderPath?: string;
+	// Friendly names for display
+	libraryTitle?: string;
+	contentTypeName?: string;
+}
+
+// Upload results with better error handling
+export interface UploadBatchResult {
+	/** Successfully uploaded item IDs */
+	itemIds: number[];
+	/** Files that failed with error details */
+	failed: Array<{ name: string; message: string; error?: any }>;
+	/** Files that were skipped (already existed) */
+	skipped?: string[];
+}
+
+// Simplified file progress tracking
+export interface FileProgress {
+	fileName: string;
+	percent: number;
+	status: 'queued' | 'uploading' | 'done' | 'error' | 'skipped';
+	errorMessage?: string;
+	itemId?: number;
+}
+
+// Extended file state for internal component use
+export interface FileUploadState extends FileProgress {
+	file: File;
+	attempts: number;
+	targetFileName?: string;
+}
+
+// Web part configuration (streamlined)
+export interface UploadAndEditWebPartProps {
+	// Core behavior
+	pickerMode: PickerMode;
+	renderMode: RenderMode;
+	selectionScope: UploadSelectionScope;
+	showContentTypePicker: boolean;
+	overwritePolicy: OverwritePolicy;
+
+	// Library configuration
+	libraries: LibraryOption[];
+	globalAllowedContentTypeIds?: string[] | 'all';
+
+	// Editor behavior
+	enableBulkAutoRefresh: boolean;
+	bulkWatchAllItems: boolean;
+
+	// UI customization
+	buttonLabel?: string;
+	dropzoneHint?: string;
+	successToast?: string;
+
+	// Advanced options
+	disableDomNudges: boolean;
+	sandboxExtra?: string;
+}
+
+// Service interface (simplified)
+export interface SharePointService {
+	getLibraryTitle(libraryUrl: string): Promise<string>;
+	getLibraryContentTypes(libraryUrl: string): Promise<ContentTypeInfo[]>;
+
+	fileExists(
+		libraryUrl: string,
+		folderPath: string | undefined,
+		fileName: string
+	): Promise<boolean>;
+
+	uploadFileWithProgress(
+		libraryUrl: string,
+		folderPath: string | undefined,
+		file: File,
+		onProgress: (percent: number) => void,
+		overwritePolicy: OverwritePolicy,
+		chunkSizeBytes?: number,
+		confirmOverwrite?: (fileName: string) => Promise<boolean>
+	): Promise<{ itemId: number; serverRelativeUrl: string; uniqueId: string }>;
+
+	setItemContentType(libraryUrl: string, itemId: number, contentTypeId: string): Promise<void>;
+}
+
+// Editor launcher events
+export interface LauncherDeterminedInfo {
+	mode: 'single' | 'bulk';
 	url: string;
-	body: string;
-	duration: number;
 }
 
-export interface EnvBadge {
-	/** Badge text to show in UI ("DEV", "UAT", "PROD") */
-	text: string;
-	/** Hex color (background) suggestion for the badge */
-	color: string;
-	/** Title/tooltip explaining build/site */
-	tooltip: string;
+export interface LauncherOpenInfo {
+	mode: 'single' | 'bulk';
+	url: string;
 }
 
-/** The full, ready-to-use context your app consumes everywhere */
-export interface SPContext {
-	context: WebPartContext | BaseComponentContext;
-	pageContext: PageContext;
+// Error handling
+export interface SPFormError {
+	message: string;
+	code?: string;
+	context?: any;
+	originalError?: any;
+}
 
-	sp: SPFI;
-	graph: GraphFI;
+// Component state management
+export type ComponentStage = 'idle' | 'destination' | 'upload' | 'editing';
 
-	spNoCache: SPFI;
-	spShortCached: SPFI;
-	spLongCached: SPFI;
-	spPessimisticRefresh: SPFI;
+export interface ComponentState {
+	stage: ComponentStage;
+	dialogOpen: boolean;
+	choice?: DestinationChoice;
+	pendingFiles: File[];
+	uploadedItemIds: number[];
+	errorMsg: string | null;
+	isLoading: boolean;
+	loadingMessage?: string;
+}
 
-	graphNoCache: GraphFI;
-	graphShortCached: GraphFI;
-	graphLongCached: GraphFI;
-	graphPessimisticRefresh: GraphFI;
+// Utility types for better type safety
+export type NonEmptyArray<T> = [T, ...T[]];
 
-	logLevel: LogLevel;
-	correlationId: string;
+export interface UploadOptions {
+	allowMultiple: boolean;
+	acceptedFileTypes?: string[];
+	maxFileSize?: number;
+	maxFiles?: number;
+}
 
-	siteUrl: string;
-	webUrl: string;
-	webRelativeUrl: string;
-	webAbsoluteUrl: string;
-	siteId: string;
-	webId: string;
-	webTitle: string;
-	cultureName?: string;
-	uiLang?: string;
-	aadTenantId?: string;
-	currentUserLoginName?: string;
-	currentUserDisplayName?: string;
-	isTeams: boolean;
-	isClassicPage: boolean;
+// Event callbacks
+export interface ComponentCallbacks {
+	onFilesPicked?: (files: File[]) => void;
+	onUploadStart?: (files: File[]) => void;
+	onUploadProgress?: (progress: FileProgress[]) => void;
+	onUploadComplete?: (result: UploadBatchResult) => void;
+	onEditingStart?: (itemIds: number[]) => void;
+	onEditingComplete?: () => void;
+	onError?: (error: SPFormError) => void;
+}
 
-	/** Centralized HTTP gateway (SP, AAD, Flow) */
-	http: HttpGateway;
-	/** Context-bound link builders */
-	links: LinksBound;
-	/** Shared, enriched logger (console + optional Diagnostics + optional AppInsights) */
-	logger: LoggerFacade;
+// Hook return types for better reusability
+export interface UseUploadState {
+	state: ComponentState;
+	actions: {
+		setStage: (stage: ComponentStage) => void;
+		setDialogOpen: (open: boolean) => void;
+		setChoice: (choice: DestinationChoice | undefined) => void;
+		setPendingFiles: (files: File[]) => void;
+		setUploadedItemIds: (ids: number[]) => void;
+		setError: (error: string | null) => void;
+		setLoading: (loading: boolean, message?: string) => void;
+		reset: () => void;
+	};
+}
 
-	/** Site environment resolved from the URL (dev/uat/prod) */
-	env: EnvName;
-	/** True if env === "prod" */
-	isProdSite: boolean;
-	/** Webpack build mode from process.env.NODE_ENV */
-	buildMode: 'production' | 'development' | 'test' | 'unknown';
-	/** True if buildMode === "production" */
-	isProdBuild: boolean;
-	/** Small helper for showing an environment badge in your UI */
-	envBadge(): EnvBadge;
+// Configuration validation
+export interface ConfigValidationResult {
+	isValid: boolean;
+	errors: string[];
+	warnings: string[];
+}
 
-	/** Create an SPFI for another web URL with a chosen cache flavor */
-	forWeb(webUrl: string, cache?: CacheTTL): SPFI;
+// Toast notification types
+export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
-	/** Temporarily switch both SP & Graph to a flavor for a block of work */
-	with<T>(cache: CacheTTL, fn: (sp: SPFI, graph: GraphFI) => Promise<T>): Promise<T>;
+export interface ToastMessage {
+	id?: string;
+	type: ToastType;
+	title?: string;
+	message: string;
+	timeout?: number;
+	persistent?: boolean;
 }
