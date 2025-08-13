@@ -1,13 +1,14 @@
-// src/webparts/UploadAndEdit/components/UploadZone.tsx
 import * as React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
 	Stack,
 	ProgressIndicator,
 	Text,
 	DefaultButton,
+	PrimaryButton,
 	MessageBar,
 	MessageBarType,
+	Link,
 } from '@fluentui/react';
 import { debounce } from '../utils';
 import { DestinationChoice, OverwritePolicy, SharePointService, UploadBatchResult } from '../types';
@@ -22,21 +23,35 @@ export interface UploadZoneProps {
 	onBatchComplete?: (result: UploadBatchResult) => void;
 	onBatchCanceled?: () => void;
 
+	/** Optional: if overwrite policy is "overwrite", ask user first */
 	confirmOverwrite?: (fileName: string) => Promise<boolean>;
 
 	title?: string;
 	hint?: string;
 	cancelButtonLabel?: string;
 
+	/** Start uploading immediately when mounted */
 	autoStart?: boolean; // default: true
+
+	/**
+	 * NEW: If false, do NOT call onBatchComplete automatically.
+	 * Keep the UploadZone visible so users can retry failed items, then
+	 * call onRequestProceed() when you want to move on.
+	 */
+	launchEditorOnComplete?: boolean; // default: true
+	onRequestProceed?: (result: UploadBatchResult) => void;
 }
 
-type FileProgress = {
-	name: string;
+type RowStatus = 'queued' | 'starting' | 'uploading' | 'done' | 'error' | 'skipped';
+
+type FileRow = {
+	file: File;
+	targetFileName?: string;
 	percent: number;
-	status: 'queued' | 'uploading' | 'done' | 'error';
+	status: RowStatus;
 	errorMessage?: string;
 	itemId?: number;
+	attempts: number;
 };
 
 export const UploadZone: React.FC<UploadZoneProps> = (props) => {
@@ -53,172 +68,226 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 		hint,
 		cancelButtonLabel = 'Cancel',
 		autoStart = true,
+		launchEditorOnComplete = true,
+		onRequestProceed,
 	} = props;
 
-	const [pending, setPending] = useState<{ file: File; targetFileName?: string }[]>(() =>
-		initialFiles.map((f) => ({ file: f }))
+	const [rows, setRows] = useState<FileRow[]>(() =>
+		initialFiles.map((f) => ({ file: f, percent: 0, status: 'queued', attempts: 0 }))
 	);
-	const [progress, setProgress] = useState<FileProgress[]>([]);
 	const [uploading, setUploading] = useState(false);
 	const [canceled, setCanceled] = useState(false);
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+	// refresh when new files come in
 	useEffect(() => {
-		setPending(initialFiles.map((f) => ({ file: f })));
-		setProgress([]);
+		setRows(initialFiles.map((f) => ({ file: f, percent: 0, status: 'queued', attempts: 0 })));
 		setUploading(false);
 		setCanceled(false);
 		setErrorMsg(null);
 	}, [initialFiles]);
 
-	const resetBatch = () => {
-		setUploading(false);
-		setCanceled(false);
-		setPending([]);
-		setProgress([]);
-		setErrorMsg(null);
-	};
+	// helper: compute batch summary
+	const summary = useMemo(() => {
+		const itemIds = rows
+			.filter((r) => r.status === 'done' && typeof r.itemId === 'number')
+			.map((r) => r.itemId!) as number[];
+		const failed = rows
+			.filter((r) => r.status === 'error')
+			.map((r) => ({ name: r.file.name, message: r.errorMessage || 'Failed' }));
+		const skipped = rows.filter((r) => r.status === 'skipped').map((r) => r.file.name);
+		return { itemIds, failed, skipped };
+	}, [rows]);
 
-	const cancelUpload = () => {
+	const resetAndCancel = () => {
+		setUploading(false);
 		setCanceled(true);
-		resetBatch();
 		onBatchCanceled?.();
 	};
 
-	const startUpload = async () => {
-		if (!destination?.libraryUrl || pending.length === 0) return;
+	// ---- single-file upload primitive (with retry support) ----
+	const uploadOne = useCallback(
+		async (index: number): Promise<void> => {
+			const row = rows[index];
+			if (!row) return;
 
-		setUploading(true);
-		setCanceled(false);
-		setErrorMsg(null);
+			// set "starting" so UI doesn't look frozen prior to first progress callback
+			setRows((prev) => {
+				const n = [...prev];
+				n[index] = { ...n[index], status: 'starting', percent: 0, errorMessage: undefined };
+				return n;
+			});
 
-		const effectivePolicy: OverwritePolicy[] = pending.map(() => overwritePolicy);
-
-		for (let i = 0; i < pending.length; i++) {
-			const p = pending[i];
+			// decide effective policy for this attempt
+			let effectivePolicy = overwritePolicy;
 			try {
 				const exists = await spService.fileExists(
 					destination.libraryUrl,
 					destination.folderPath,
-					p.file.name
+					row.file.name
 				);
 				if (exists) {
 					if (overwritePolicy === 'skip') {
-						// keep skip
-					} else if (overwritePolicy === 'suffix') {
-						// keep suffix
-					} else if (overwritePolicy === 'overwrite' && confirmOverwrite) {
-						const ok = await confirmOverwrite(p.file.name);
-						if (!ok) effectivePolicy[i] = 'skip';
-					}
-				}
-			} catch {
-				// ignore preflight errors
-			}
-			if (canceled) break;
-		}
-
-		const seeded: FileProgress[] = pending.map((p) => ({
-			name: p.targetFileName || p.file.name,
-			percent: 0,
-			status: 'queued',
-		}));
-		setProgress(seeded);
-
-		const failed: Array<{ name: string; message: string }> = [];
-		const itemIds: number[] = [];
-
-		for (let i = 0; i < pending.length; i++) {
-			if (canceled) break;
-			const p = pending[i];
-			const policy = effectivePolicy[i];
-
-			try {
-				setProgress((prev) => {
-					const next = [...prev];
-					next[i] = { ...next[i], status: 'uploading', percent: 0 };
-					return next;
-				});
-
-				const updatePct = debounce((pct: number) => {
-					setProgress((prev) => {
-						const n = [...prev];
-						n[i] = { ...n[i], percent: Math.max(0, Math.min(100, pct)), status: 'uploading' };
-						return n;
-					});
-				}, 50);
-
-				if (policy === 'skip') {
-					const exists = await spService.fileExists(
-						destination.libraryUrl,
-						destination.folderPath,
-						p.file.name
-					);
-					if (exists) {
-						setProgress((prev) => {
+						// mark skipped & bail
+						setRows((prev) => {
 							const n = [...prev];
-							n[i] = { ...n[i], status: 'error', errorMessage: 'Skipped (name exists)' };
+							n[index] = {
+								...n[index],
+								status: 'skipped',
+								errorMessage: 'Already exists (skipped)',
+								percent: 0,
+							};
 							return n;
 						});
-						failed.push({ name: p.file.name, message: 'Skipped (name exists)' });
-						continue;
+						return;
 					}
+					if (overwritePolicy === 'overwrite' && confirmOverwrite) {
+						const ok = await confirmOverwrite(row.file.name);
+						if (!ok) {
+							// treat as skipped
+							setRows((prev) => {
+								const n = [...prev];
+								n[index] = {
+									...n[index],
+									status: 'skipped',
+									errorMessage: 'User chose not to overwrite',
+									percent: 0,
+								};
+								return n;
+							});
+							return;
+						}
+					}
+					// suffix policy handled inside upload if needed
 				}
+			} catch {
+				// ignore preflight errors; proceed to upload
+			}
 
+			// progress updater with debouncing (smoother UI)
+			const updatePct = debounce((pct: number) => {
+				setRows((prev) => {
+					const n = [...prev];
+					if (!n[index]) return n;
+					n[index] = {
+						...n[index],
+						status: pct >= 0 && pct < 100 ? 'uploading' : n[index].status,
+						percent: Math.max(0, Math.min(100, pct)),
+					};
+					return n;
+				});
+			}, 50);
+
+			try {
 				const { itemId } = await spService.uploadFileWithProgress(
 					destination.libraryUrl,
 					destination.folderPath,
-					p.file,
-					(pct) => updatePct(pct),
-					policy
+					row.file,
+					updatePct,
+					effectivePolicy,
 				);
 
-				setProgress((prev) => {
+				setRows((prev) => {
 					const n = [...prev];
-					n[i] = { ...n[i], percent: 100, status: 'done', itemId };
+					n[index] = {
+						...n[index],
+						status: 'done',
+						percent: 100,
+						itemId,
+						attempts: row.attempts + 1,
+					};
 					return n;
 				});
-				itemIds.push(itemId);
 			} catch (e: any) {
 				const message = (e && (e.message || e.toString())) || 'Upload failed';
-				failed.push({ name: p.file.name, message });
-				setProgress((prev) => {
+				setRows((prev) => {
 					const n = [...prev];
-					n[i] = { ...n[i], status: 'error', errorMessage: message };
+					n[index] = {
+						...n[index],
+						status: 'error',
+						errorMessage: message,
+						attempts: row.attempts + 1,
+					};
 					return n;
 				});
+			}
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		},
+		[
+			rows,
+			destination.libraryUrl,
+			destination.folderPath,
+			overwritePolicy,
+			confirmOverwrite,
+			spService,
+		]
+	);
+
+	// ---- whole-batch uploader (sequential) ----
+	const startUpload = useCallback(async () => {
+		if (!rows.length) return;
+		setUploading(true);
+		setCanceled(false);
+		setErrorMsg(null);
+
+		for (let i = 0; i < rows.length; i++) {
+			if (canceled) break;
+			// only upload queued/starting/error (allow retry)
+			const st = rows[i].status;
+			if (st === 'queued' || st === 'starting' || st === 'error') {
+				// eslint-disable-next-line no-await-in-loop
+				await uploadOne(i);
 			}
 		}
 
 		setUploading(false);
 		if (canceled) return;
 
-		onBatchComplete?.({ itemIds, failed });
+		if (launchEditorOnComplete) {
+			// Original behavior: notify parent immediately
+			onBatchComplete?.(summary);
+		} else {
+			// New optional pattern: wait for user to click "Continue"
+			// Parent can show a "Continue" button via onRequestProceed
+			onRequestProceed?.(summary);
+		}
+	}, [
+		rows,
+		canceled,
+		uploadOne,
+		launchEditorOnComplete,
+		onBatchComplete,
+		onRequestProceed,
+		summary,
+	]);
 
-		resetBatch();
-	};
-
+	// auto-start uploads when mounted / when rows change from picker
 	const didAutoStartRef = useRef(false);
 	useEffect(() => {
 		if (!autoStart) return;
-		if (pending.length > 0 && !uploading && !didAutoStartRef.current) {
+		if (rows.length > 0 && !uploading && !didAutoStartRef.current) {
 			didAutoStartRef.current = true;
 			startUpload();
 		}
-		if (pending.length === 0) {
+		if (rows.length === 0) {
 			didAutoStartRef.current = false;
 		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [pending, autoStart]);
+	}, [rows, autoStart, uploading, startUpload]);
 
+	// overall percent (only for files that are not skipped)
 	const overallPct = useMemo(() => {
-		if (!progress.length) return 0;
-		const sum = progress.reduce((acc, p) => acc + (isFinite(p.percent) ? p.percent : 0), 0);
-		return Math.round(sum / progress.length);
-	}, [progress]);
+		const count = rows.filter((r) => r.status !== 'skipped').length;
+		if (!count) return 0;
+		const sum = rows
+			.filter((r) => r.status !== 'skipped')
+			.reduce((acc, r) => acc + (isFinite(r.percent) ? r.percent : 0), 0);
+		return Math.round(sum / count);
+	}, [rows]);
 
-	const total = pending.length || progress.length;
+	const anyFailed = rows.some((r) => r.status === 'error');
+	const anyDone = rows.some((r) => r.status === 'done');
 
+	// ---- UI ----
 	return (
 		<Stack tokens={{ childrenGap: 12 }}>
 			{/* Destination header */}
@@ -261,25 +330,47 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 				</MessageBar>
 			)}
 
-			{total > 0 && (
+			{/* Overall progress (ignore skipped) */}
+			{rows.length > 0 && (
 				<ProgressIndicator
-					label={`Uploading ${total} file${total > 1 ? 's' : ''}`}
+					label={`Uploading ${rows.length} file${rows.length > 1 ? 's' : ''}`}
 					percentComplete={overallPct / 100}
 				/>
 			)}
 
-			<Stack tokens={{ childrenGap: 6 }}>
-				{progress.map((p, idx) => (
-					<Stack key={`${p.name}-${idx}`} tokens={{ childrenGap: 2 }}>
-						<Text>{p.name}</Text>
+			{/* Per-file rows */}
+			<Stack tokens={{ childrenGap: 8 }}>
+				{rows.map((r, idx) => (
+					<Stack key={`${r.file.name}-${idx}`} tokens={{ childrenGap: 4 }}>
+						<Stack horizontal horizontalAlign="space-between">
+							<Text>{r.file.name}</Text>
+							{r.status === 'error' && (
+								<Link
+									onClick={() => uploadOne(idx)}
+									disabled={uploading}
+									styles={{ root: { fontWeight: 600 } }}
+								>
+									Retry
+								</Link>
+							)}
+						</Stack>
+
 						<ProgressIndicator
-							percentComplete={(p.percent || 0) / 100}
+							percentComplete={
+								r.status === 'starting'
+									? undefined // indeterminate while first chunk is getting underway
+									: (r.percent || 0) / 100
+							}
 							description={
-								p.status === 'error'
-									? p.errorMessage || 'Failed'
-									: p.status === 'done'
+								r.status === 'error'
+									? r.errorMessage || 'Failed'
+									: r.status === 'done'
 									? 'Completed'
-									: `${p.percent}%`
+									: r.status === 'skipped'
+									? 'Skipped'
+									: r.status === 'starting'
+									? 'Starting…'
+									: `${r.percent}%`
 							}
 						/>
 					</Stack>
@@ -287,10 +378,17 @@ export const UploadZone: React.FC<UploadZoneProps> = (props) => {
 			</Stack>
 
 			<Stack horizontal horizontalAlign="end" tokens={{ childrenGap: 8 }}>
+				{!launchEditorOnComplete && (
+					<PrimaryButton
+						text={anyDone ? 'Continue to properties' : 'Skip'}
+						onClick={() => onRequestProceed?.(summary)}
+						disabled={!anyDone && !anyFailed}
+					/>
+				)}
 				<DefaultButton
 					text={cancelButtonLabel}
-					onClick={cancelUpload}
-					disabled={uploading && total === 0}
+					onClick={resetAndCancel}
+					disabled={uploading && rows.length === 0}
 				/>
 			</Stack>
 		</Stack>

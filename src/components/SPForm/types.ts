@@ -113,9 +113,11 @@ export interface FileProgress {
 
 /** Batch upload outcome */
 export interface UploadBatchResult {
-	itemIds: number[]; // successfully uploaded item IDs
+	itemIds: number[];
 	failed: Array<{ name: string; message: string }>;
+	skipped?: string[]; // NEW
 }
+
 
 // ---------- Services contracts ----------
 

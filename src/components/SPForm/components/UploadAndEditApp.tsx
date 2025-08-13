@@ -93,7 +93,7 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 	} = props;
 
 	const spService = useMemo(
-		() => createSharePointService(),
+		() => createSharePointService("A", null),
 		[siteUrl, spfxContext]
 	);
 	const { push } = useToasts();
@@ -141,13 +141,20 @@ export const UploadAndEditApp: React.FC<Props> = (props) => {
 				}. Preparing properties…`,
 			});
 		}
+		if (res.skipped && res.skipped.length) {
+			push({
+				kind: 'info',
+				text: `${res.skipped.length} file${
+					res.skipped.length > 1 ? 's' : ''
+				} skipped (already existed).`,
+			});
+		}
 		if (res.failed.length) {
 			push({
 				kind: 'warning',
-				text: `${res.failed.length} file${res.failed.length > 1 ? 's' : ''} skipped/failed.`,
+				text: `${res.failed.length} file${res.failed.length > 1 ? 's' : ''} failed.`,
 			});
 		}
-
 		// 🔒 Force ContentTypeId on ALL uploaded items BEFORE opening the form
 		if (choice?.contentTypeId && res.itemIds.length > 0) {
 			try {
