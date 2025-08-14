@@ -1,4 +1,5 @@
-// FINALIZED VERSION - Incorporates all loading, race condition, and unused variable fixes.
+// src/webparts/UploadAndEdit/components/editor/LibraryItemEditorLauncher.tsx
+// POLISHED FINAL VERSION - All TypeScript and ESLint issues fixed
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
@@ -61,8 +62,8 @@ interface ItemInfo {
 	uniqueId: string;
 	fileName: string;
 	modified: string;
-	serverRelativeUrl?: string;
-	listItemId?: number;
+	serverRelativeUrl: string;
+	listItemId: number;
 }
 
 interface LoadingState {
@@ -77,37 +78,74 @@ interface InteractionState {
 	progress?: number;
 }
 
+interface InitializationResult {
+	url: string;
+	mode: 'single' | 'bulk';
+	details: ItemInfo[];
+}
+
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
 
 const createAdvancedCSS = (hideBreadcrumbs: boolean, hideContentTypeField: boolean): string => {
 	const css: string[] = [];
+
+	// Base styles
 	css.push(`
-		body { margin: 0 !important; padding: 0 !important; overflow-x: hidden !important; }
-		.ms-Dialog-main { padding: 0 !important; }
+		body {
+			margin: 0 !important;
+			padding: 0 !important;
+			overflow-x: hidden !important;
+		}
+		.ms-Dialog-main {
+			padding: 0 !important;
+		}
 	`);
+
+	// Hide breadcrumbs
 	if (hideBreadcrumbs) {
 		css.push(`
-			.od-TopNav, .od-TopBar, .ms-CommandBar, .ms-Breadcrumb, .ms-Nav, [data-automationid="Breadcrumb"],
-			.sp-appBar, #spPageChromeAppDiv, .spSiteHeader, #SuiteNavWrapper, #s4-titlerow, #s4-ribbonrow
-			{ display: none !important; height: 0 !important; overflow: hidden !important; visibility: hidden !important; }
+			.od-TopNav, .od-TopBar, .ms-CommandBar, .ms-Breadcrumb, .ms-Nav,
+			[data-automationid="Breadcrumb"], .sp-appBar, #spPageChromeAppDiv,
+			.spSiteHeader, #SuiteNavWrapper, #s4-titlerow, #s4-ribbonrow {
+				display: none !important;
+				height: 0 !important;
+				overflow: hidden !important;
+				visibility: hidden !important;
+			}
 		`);
 	}
+
+	// Hide content type field
 	if (hideContentTypeField) {
 		css.push(`
-			div[data-field="ContentType"], div[aria-label*="Content type" i], [data-automationid="ContentTypeSelector"]
-			{ display: none !important; height: 0 !important; overflow: hidden !important; visibility: hidden !important; }
+			div[data-field="ContentType"],
+			div[aria-label*="Content type" i],
+			[data-automationid="ContentTypeSelector"] {
+				display: none !important;
+				height: 0 !important;
+				overflow: hidden !important;
+				visibility: hidden !important;
+			}
 		`);
 	}
+
 	return css.join('\n');
 };
 
 async function resolveListId(sp: SPFI, libraryServerRelativeUrl: string): Promise<string> {
-	const list = await sp.web.getList(libraryServerRelativeUrl).select('Id')();
-	const listId = list?.Id as string;
-	if (!listId) throw new Error('List ID not found in response');
-	return listId;
+	try {
+		const list = await sp.web.getList(libraryServerRelativeUrl).select('Id')();
+		const listId = list?.Id as string;
+		if (!listId) {
+			throw new Error('List ID not found in response');
+		}
+		return listId;
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+		throw new Error(`Failed to resolve list ID: ${errorMessage}`);
+	}
 }
 
 async function getItemDetails(
@@ -121,21 +159,27 @@ async function getItemDetails(
 			const item: any = await list.items
 				.getById(id)
 				.select('Id', 'UniqueId', 'FileLeafRef', 'Modified', 'FileRef', 'GUID')();
+
 			return {
-				id: item.Id,
-				uniqueId: item.UniqueId || item.GUID,
-				fileName: item.FileLeafRef,
-				modified: item.Modified,
-				serverRelativeUrl: item.FileRef,
-				listItemId: item.Id,
+				id: item.Id as number,
+				uniqueId: (item.UniqueId || item.GUID) as string,
+				fileName: item.FileLeafRef as string,
+				modified: item.Modified as string,
+				serverRelativeUrl: item.FileRef as string,
+				listItemId: item.Id as number,
 			};
 		})
 	);
+
 	const successfulResults: ItemInfo[] = [];
 	results.forEach((result) => {
-		if (result.status === 'fulfilled') successfulResults.push(result.value);
-		else console.warn('Failed to get item details:', result.reason);
+		if (result.status === 'fulfilled') {
+			successfulResults.push(result.value);
+		} else {
+			console.warn('Failed to get item details:', result.reason);
+		}
 	});
+
 	return successfulResults;
 }
 
@@ -161,7 +205,12 @@ function buildBulkViewUrl(
 	const cleanSiteUrl = siteUrl.replace(/\/$/, '');
 	let url = `${cleanSiteUrl}${libraryServerRelativeUrl}`;
 	const params = new URLSearchParams();
-	if (viewId) params.set('viewid', `{${viewId.replace(/[{}]/g, '')}}`);
+
+	if (viewId) {
+		const cleanViewId = viewId.replace(/[{}]/g, '');
+		params.set('viewid', `{${cleanViewId}}`);
+	}
+
 	if (itemDetails.length > 0) {
 		const itemIdsStr = itemDetails.map((item) => item.id.toString()).join(',');
 		const fileNames = itemDetails.map((item) => item.fileName).join(',');
@@ -171,7 +220,11 @@ function buildBulkViewUrl(
 		params.set('env', 'WebView');
 		params.set('selectedItems', itemIdsStr);
 	}
-	if (params.toString()) url += `?${params.toString()}`;
+
+	if (params.toString()) {
+		url += `?${params.toString()}`;
+	}
+
 	return url;
 }
 
@@ -190,6 +243,7 @@ function isListFormEditUrl(href: string): boolean {
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
+
 export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps> = (props) => {
 	const {
 		siteUrl,
@@ -212,6 +266,10 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		hideContentTypeField = false,
 	} = props;
 
+	// ============================================================================
+	// STATE MANAGEMENT
+	// ============================================================================
+
 	const [targetUrl, setTargetUrl] = useState<string>('');
 	const [mode, setMode] = useState<'single' | 'bulk'>('bulk');
 	const [modalOpen, setModalOpen] = useState<boolean>(isOpen && renderMode === 'modal');
@@ -227,29 +285,44 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		progress: 0,
 	});
 
+	// ============================================================================
+	// REFS AND MEMOIZED VALUES
+	// ============================================================================
+
 	const sp = useMemo(() => spfi(siteUrl).using(PnP_SPFX(spfxContext)), [siteUrl, spfxContext]);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 	const singleInitialLoadSeenRef = useRef(false);
 	const changeDetectionTimer = useRef<number>();
+
 	const stableKey = useMemo(
 		() => `${siteUrl}|${libraryServerRelativeUrl}|${itemIds.join(',')}|${renderMode}`,
 		[siteUrl, libraryServerRelativeUrl, itemIds, renderMode]
 	);
 
+	// ============================================================================
+	// CALLBACKS
+	// ============================================================================
+
 	const injectAdvancedCSS = useCallback(
 		(doc: Document) => {
 			try {
 				const styleId = 'enhanced-launcher-styles';
-				if (doc.getElementById(styleId)) return;
+				if (doc.getElementById(styleId)) {
+					return;
+				}
+
 				const style = doc.createElement('style');
 				style.id = styleId;
 				style.type = 'text/css';
 				style.appendChild(
 					doc.createTextNode(createAdvancedCSS(hideBreadcrumbs, hideContentTypeField))
 				);
-				doc.head.appendChild(style);
-			} catch (e) {
-				console.warn('CSS injection failed:', e);
+
+				if (doc.head) {
+					doc.head.appendChild(style);
+				}
+			} catch (error) {
+				console.warn('CSS injection failed:', error);
 			}
 		},
 		[hideBreadcrumbs, hideContentTypeField]
@@ -281,6 +354,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				};
 
 				let selectedCount = 0;
+
 				for (const selector of modernSelectors.listItems) {
 					const rows = doc.querySelectorAll(selector);
 					if (rows.length === 0) continue;
@@ -289,6 +363,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						Array.from(rows).forEach((row: Element) => {
 							const rowElement = row as HTMLElement;
 							const rowText = rowElement.innerText || rowElement.textContent || '';
+
 							if (rowText.includes(item.fileName)) {
 								const checkbox = row.querySelector(
 									modernSelectors.checkboxes.join(',')
@@ -300,6 +375,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 							}
 						});
 					});
+
 					if (selectedCount > 0) break;
 				}
 
@@ -319,8 +395,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				} else {
 					setInteractionState({ isInteracting: false, message: 'Auto-selection failed' });
 				}
-			} catch (e) {
-				console.error('Bulk selection error:', e);
+			} catch (error) {
+				console.error('Bulk selection error:', error);
 				setInteractionState({ isInteracting: false, message: 'Selection error' });
 			}
 		},
@@ -331,11 +407,16 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		const frame = iframeRef.current;
 		if (!frame) return;
 
-		onOpen?.({ mode, url: targetUrl });
+		if (onOpen) {
+			onOpen({ mode, url: targetUrl });
+		}
 
 		const doc = frame.contentDocument || frame.contentWindow?.document;
-		if (doc) injectAdvancedCSS(doc);
+		if (doc) {
+			injectAdvancedCSS(doc);
+		}
 
+		// Handle single edit completion detection
 		if (mode === 'single') {
 			try {
 				const href = frame.contentWindow?.location.href;
@@ -347,15 +428,16 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 						decodeURIComponent(href).includes(window.location.href)
 					) {
 						setModalOpen(false);
-						onSaved?.();
-						onDismiss?.();
+						if (onSaved) onSaved();
+						if (onDismiss) onDismiss();
 					}
 				}
-			} catch (e) {
-				console.warn('Single edit navigation detection failed:', e);
+			} catch (error) {
+				console.warn('Single edit navigation detection failed:', error);
 			}
 		}
 
+		// Handle bulk selection
 		if (!disableDomNudges && mode === 'bulk' && itemDetails.length > 0 && doc) {
 			setTimeout(() => performAdvancedBulkSelection(doc), 2000);
 		}
@@ -371,13 +453,22 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		onDismiss,
 	]);
 
+	// ============================================================================
+	// EFFECTS
+	// ============================================================================
+
+	// Modal visibility management
 	useEffect(() => {
-		if (renderMode === 'modal') setModalOpen(!!isOpen);
+		if (renderMode === 'modal') {
+			setModalOpen(!!isOpen);
+		}
 	}, [renderMode, isOpen]);
 
+	// Main initialization effect
 	useEffect(() => {
 		let isCancelled = false;
-		const fetchInitializationData = async () => {
+
+		const fetchInitializationData = async (): Promise<InitializationResult> => {
 			const currentMode: 'single' | 'bulk' = itemIds.length === 1 ? 'single' : 'bulk';
 			let url = '';
 			let fetchedDetails: ItemInfo[] = [];
@@ -387,44 +478,67 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 				url = buildSingleEditUrl(siteUrl, listId, itemIds[0], window.location.href);
 			} else {
 				fetchedDetails = await getItemDetails(sp, libraryServerRelativeUrl, itemIds);
-				if (fetchedDetails.length === 0)
+				if (fetchedDetails.length === 0) {
 					throw new Error('Could not retrieve details for any files.');
+				}
 				url = buildBulkViewUrl(siteUrl, libraryServerRelativeUrl, fetchedDetails, viewId);
 			}
+
 			return { url, mode: currentMode, details: fetchedDetails };
 		};
 
+		// Reset state
 		setError(null);
 		setTargetUrl('');
 		setItemDetails([]);
 		setInteractionState({ isInteracting: false, message: '' });
 		setLoadingState({ isLoading: true, message: 'Initializing...' });
 		singleInitialLoadSeenRef.current = false;
+
+		// Validate input
 		if (!itemIds || itemIds.length === 0) {
 			setLoadingState({ isLoading: false, message: 'No items selected.' });
 			return;
 		}
 
+		// Set loading timeout
 		const loadingTimeout = setTimeout(() => {
-			if (isCancelled) return;
-			setError('Initialization timed out. Please check permissions and refresh.');
-			setLoadingState({ isLoading: false, message: 'Timeout' });
+			if (!isCancelled) {
+				setError('Initialization timed out. Please check permissions and refresh.');
+				setLoadingState({ isLoading: false, message: 'Timeout' });
+			}
 		}, 30000);
 
+		// Execute initialization
 		fetchInitializationData()
 			.then((result) => {
 				if (isCancelled) return;
-				const { url, mode: resultMode, details } = result;
-				onDetermined?.({ mode: resultMode as 'single' | 'bulk', url, bulk: resultMode === 'bulk' });
 
+				const { url, mode: resultMode, details } = result;
+
+				if (onDetermined) {
+					onDetermined({ mode: resultMode, url, bulk: resultMode === 'bulk' });
+				}
+
+				// Handle non-modal modes
 				if (renderMode === 'newtab' || renderMode === 'samepage') {
-					onOpen?.({ mode: resultMode, url });
-					if (renderMode === 'newtab') window.open(url, '_blank', 'noopener,noreferrer');
-					else window.location.href = url;
-					onDismiss?.();
+					if (onOpen) {
+						onOpen({ mode: resultMode, url });
+					}
+
+					if (renderMode === 'newtab') {
+						window.open(url, '_blank', 'noopener,noreferrer');
+					} else {
+						window.location.href = url;
+					}
+
+					if (onDismiss) {
+						onDismiss();
+					}
 					return;
 				}
 
+				// Set modal state
 				setMode(resultMode);
 				setItemDetails(details);
 				setTargetUrl(url);
@@ -432,6 +546,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			})
 			.catch((err) => {
 				if (isCancelled) return;
+
 				const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
 				setError(errorMessage);
 				setLoadingState({ isLoading: false, message: 'Initialization failed' });
@@ -440,18 +555,36 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		return () => {
 			isCancelled = true;
 			clearTimeout(loadingTimeout);
-			if (changeDetectionTimer.current) clearInterval(changeDetectionTimer.current);
+			if (changeDetectionTimer.current) {
+				clearInterval(changeDetectionTimer.current);
+			}
 		};
-	}, [stableKey, sp, viewId, onDetermined, onOpen, onDismiss]);
+	}, [
+		stableKey,
+		sp,
+		viewId,
+		onDetermined,
+		onOpen,
+		onDismiss,
+		siteUrl,
+		libraryServerRelativeUrl,
+		itemIds,
+		renderMode,
+	]);
 
+	// Auto-refresh effect for bulk mode
 	useEffect(() => {
-		if (mode !== 'bulk' || !enableBulkAutoRefresh || !targetUrl) return;
+		if (mode !== 'bulk' || !enableBulkAutoRefresh || !targetUrl) {
+			return;
+		}
+
 		const originalModified: Record<number, string> = {};
 		let isInitialized = false;
 
-		const checkForChanges = async () => {
+		const checkForChanges = async (): Promise<void> => {
 			try {
 				const idsToWatch = bulkWatchAllItems ? itemIds : [itemIds[0]];
+
 				if (!isInitialized) {
 					const items = await getItemDetails(sp, libraryServerRelativeUrl, idsToWatch);
 					items.forEach((item) => {
@@ -460,24 +593,34 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					isInitialized = true;
 					return;
 				}
+
 				const currentItems = await getItemDetails(sp, libraryServerRelativeUrl, idsToWatch);
 				for (const item of currentItems) {
 					if (originalModified[item.id] && item.modified !== originalModified[item.id]) {
 						setModalOpen(false);
-						onSaved?.();
-						onDismiss?.();
+						if (onSaved) onSaved();
+						if (onDismiss) onDismiss();
 						return;
 					}
 				}
-			} catch (e) {
-				console.warn('Change detection error:', e);
-				if (changeDetectionTimer.current) clearInterval(changeDetectionTimer.current);
+			} catch (error) {
+				console.warn('Change detection error:', error);
+				if (changeDetectionTimer.current) {
+					clearInterval(changeDetectionTimer.current);
+				}
 			}
 		};
-		changeDetectionTimer.current = window.setInterval(checkForChanges, 3500);
+
+		changeDetectionTimer.current = window.setInterval(() => {
+			void checkForChanges();
+		}, 3500);
+
 		void checkForChanges();
+
 		return () => {
-			if (changeDetectionTimer.current) clearInterval(changeDetectionTimer.current);
+			if (changeDetectionTimer.current) {
+				clearInterval(changeDetectionTimer.current);
+			}
 		};
 	}, [
 		mode,
@@ -491,13 +634,21 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 		onDismiss,
 	]);
 
-	if (renderMode !== 'modal') return null;
+	// ============================================================================
+	// RENDER
+	// ============================================================================
+
+	// Don't render for non-modal modes
+	if (renderMode !== 'modal') {
+		return null;
+	}
 
 	const dialogContentProps: IDialogContentProps = {
 		type: DialogType.close,
 		title: mode === 'bulk' ? `Edit Properties - ${itemIds.length} file(s)` : 'Edit File Properties',
 		showCloseButton: true,
 	};
+
 	const iframeStyle: React.CSSProperties = {
 		width: '100%',
 		border: 'none',
@@ -506,6 +657,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			: '85vh',
 		visibility: interactionState.isInteracting ? 'hidden' : 'visible',
 	};
+
 	const sandbox = `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-presentation${
 		sandboxExtra ? ` ${sandboxExtra}` : ''
 	}`;
@@ -515,14 +667,20 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 			hidden={!modalOpen}
 			onDismiss={() => {
 				setModalOpen(false);
-				onDismiss?.();
+				if (onDismiss) onDismiss();
 			}}
 			dialogContentProps={dialogContentProps}
 			minWidth="75%"
 			maxWidth="98%"
-			modalProps={{ isBlocking: true, styles: { main: { maxHeight: '95vh', height: 'auto' } } }}
+			modalProps={{
+				isBlocking: true,
+				styles: {
+					main: { maxHeight: '95vh', height: 'auto' },
+				},
+			}}
 		>
 			<Stack styles={{ root: { height: '100%', overflow: 'hidden' } }}>
+				{/* Loading indicator */}
 				{loadingState.isLoading && (
 					<Stack
 						tokens={{ childrenGap: 12 }}
@@ -530,15 +688,34 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					>
 						<Spinner size={SpinnerSize.large} />
 						<Text variant="medium">{loadingState.message}</Text>
+						{typeof loadingState.progress === 'number' && (
+							<ProgressIndicator
+								percentComplete={loadingState.progress / 100}
+								styles={{ root: { width: '300px' } }}
+							/>
+						)}
 					</Stack>
 				)}
 
+				{/* Error display */}
 				{error && (
-					<MessageBar messageBarType={MessageBarType.error} onDismiss={() => setError(null)}>
+					<MessageBar
+						messageBarType={MessageBarType.error}
+						onDismiss={() => setError(null)}
+						actions={
+							<IconButton
+								iconProps={{ iconName: 'Refresh' }}
+								title="Retry"
+								ariaLabel="Retry"
+								onClick={() => window.location.reload()}
+							/>
+						}
+					>
 						<strong>Error:</strong> {error}
 					</MessageBar>
 				)}
 
+				{/* Main content */}
 				{targetUrl && !error && (
 					<div style={{ position: 'relative', flex: 1, height: iframeStyle.height }}>
 						<iframe
@@ -551,6 +728,8 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 							loading="lazy"
 							onError={() => setError('Failed to load the edit form.')}
 						/>
+
+						{/* Interaction overlay */}
 						{interactionState.isInteracting && (
 							<div
 								style={{
@@ -581,6 +760,7 @@ export const LibraryItemEditorLauncher: React.FC<LibraryItemEditorLauncherProps>
 					</div>
 				)}
 
+				{/* Footer */}
 				<Stack
 					horizontal
 					horizontalAlign="space-between"
