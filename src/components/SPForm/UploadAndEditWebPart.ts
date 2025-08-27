@@ -74,13 +74,14 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 
 	public render(): void {
 		const configured = this._resolvedLibraries.length > 0;
-		const globalCTs = this._normalizeGlobalCTs(); // 👈
-		const element: React.ReactElement = configured
-			? React.createElement(
-					ToastHost,
-					null,
-					React.createElement(UploadAndEditApp, {
-						
+		const globalCTs = this._normalizeGlobalCTs();
+
+		// Always render ToastHost as the root component to maintain consistent DOM structure
+		const element: React.ReactElement = React.createElement(
+			ToastHost,
+			null,
+			configured
+				? React.createElement(UploadAndEditApp, {
 						siteUrl: this.context.pageContext.web.absoluteUrl,
 						spfxContext: this.context,
 
@@ -115,32 +116,33 @@ export default class UploadAndEditWebPart extends BaseClientSideWebPart<IUploadA
 						hideLoading: undefined,
 						confirmOverwrite: undefined,
 					})
-			  )
-			: React.createElement(
-					'div',
-					{
-						style: {
-							padding: 20,
-							textAlign: 'center',
-							opacity: this._resolving ? 0.6 : 1,
-							border: '1px dashed #ccc',
-							borderRadius: 4,
-							backgroundColor: '#f9f9f9',
+				: React.createElement(
+						'div',
+						{
+							key: 'configuration-placeholder', // Add key for better React reconciliation
+							style: {
+								padding: 20,
+								textAlign: 'center',
+								opacity: this._resolving ? 0.6 : 1,
+								border: '1px dashed #ccc',
+								borderRadius: 4,
+								backgroundColor: '#f9f9f9',
+							},
 						},
-					},
-					React.createElement(
-						'div',
-						{ style: { fontSize: 16, marginBottom: 8 } },
-						this._resolving ? '⏳ Resolving libraries…' : '⚙️ Configuration Required'
-					),
-					React.createElement(
-						'div',
-						{ style: { fontSize: 14, color: '#666' } },
-						this._resolving
-							? 'Please wait while we load your libraries.'
-							: 'Configure this web part in the property pane to get started.'
+						React.createElement(
+							'div',
+							{ style: { fontSize: 16, marginBottom: 8 } },
+							this._resolving ? '⏳ Resolving libraries…' : '⚙️ Configuration Required'
+						),
+						React.createElement(
+							'div',
+							{ style: { fontSize: 14, color: '#666' } },
+							this._resolving
+								? 'Please wait while we load your libraries.'
+								: 'Configure this web part in the property pane to get started.'
+						)
 					)
-			  );
+		);
 
 		ReactDom.render(element, this.domElement);
 	}
